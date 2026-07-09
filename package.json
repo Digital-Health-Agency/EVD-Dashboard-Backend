@@ -1,6 +1,6 @@
 {
   "name": "evd-server",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Focused backend API for the DHA EVD dashboard stack",
   "author": "",
   "private": true,

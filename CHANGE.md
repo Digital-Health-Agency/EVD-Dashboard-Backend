@@ -18,3 +18,8 @@
 ## 1.0.2 (2026-07-09)
 - Fix Docker build failure by syncing package-lock.json with package.json.
 
+
+## 1.0.3 (2026-07-09)
+- Fix DatabaseService lifecycle hooks by adding `@Injectable()`, restoring schema bootstrap on startup.
+- Log PostgreSQL connection details and server port binding during application setup.
+
