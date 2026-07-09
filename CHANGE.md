@@ -10,3 +10,7 @@
 ## 1.0.0 (2026-07-09)
 - Major release: PostgreSQL backend replacing MongoDB, with Better Auth Kysely adapter, schema bootstrap, and updated services.
 
+
+## 1.0.1 (2026-07-09)
+- Patch release to align version with dashboard v1.0.1; no functional changes.
+
