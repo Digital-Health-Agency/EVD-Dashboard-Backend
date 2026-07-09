@@ -8,4 +8,10 @@ export const envConfig = {
   ).split(','),
   cookieDomain: process.env.COOKIE_DOMAIN || 'localhost',
   uploadDir: process.env.UPLOAD_DIR || 'uploads',
+  postgresHost: process.env.POSTGRES_HOST || 'localhost',
+  postgresPort: parseInt(process.env.POSTGRES_PORT || '5432', 10),
+  postgresDb: process.env.POSTGRES_DB || 'evd_raw',
+  postgresAppDb: process.env.POSTGRES_APP_DB || 'evd_app',
+  postgresUser: process.env.POSTGRES_USER || 'evd_analytics',
+  postgresPassword: process.env.POSTGRES_PASSWORD || '',
 };

@@ -11,10 +11,17 @@ services:
       - TRUSTED_ORIGINS=${TRUSTED_ORIGINS}
       - COOKIE_DOMAIN=${COOKIE_DOMAIN}
       - UPLOAD_DIR=./uploads
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=evd_data
+      - POSTGRES_APP_DB=evd_app
+      - POSTGRES_USER=evd_analytics
+      - POSTGRES_PASSWORD=evd_password
     volumes:
       - uploads:/app/uploads
     depends_on:
       - mongo
+      - postgres
     restart: unless-stopped
 
   mongo:
@@ -25,6 +32,20 @@ services:
       - mongo-data:/data/db
     restart: unless-stopped
 
+  postgres:
+    image: postgres:16
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=evd_data
+      - POSTGRES_USER=evd_analytics
+      - POSTGRES_PASSWORD=evd_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    restart: unless-stopped
+
 volumes:
   mongo-data:
+  postgres-data:
   uploads:
