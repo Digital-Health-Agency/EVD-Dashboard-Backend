@@ -14,3 +14,7 @@
 ## 1.0.1 (2026-07-09)
 - Patch release to align version with dashboard v1.0.1; no functional changes.
 
+
+## 1.0.2 (2026-07-09)
+- Fix Docker build failure by syncing package-lock.json with package.json.
+
