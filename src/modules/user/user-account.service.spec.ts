@@ -171,6 +171,30 @@ describe('UserAccountService', () => {
     expect(removed.image).toBeNull();
   });
 
+  it('updates login user profile fields for admin edits', async () => {
+    const created = await service.create({
+      name: 'Response User',
+      email: 'response@example.com',
+      password: 'password123',
+      role: 'user',
+    });
+
+    const updated = await service.update(created.id, {
+      name: 'Response Admin',
+      email: 'RESPONSE.ADMIN@example.com',
+      role: 'admin',
+    });
+
+    expect(updated.name).toBe('Response Admin');
+    expect(updated.email).toBe('response.admin@example.com');
+    expect(updated.role).toBe('admin');
+
+    const reloaded = await service.findOne(created.id);
+    expect(reloaded.name).toBe('Response Admin');
+    expect(reloaded.email).toBe('response.admin@example.com');
+    expect(reloaded.role).toBe('admin');
+  });
+
   it('deactivates a user by banning the auth account and revoking sessions', async () => {
     const created = await service.create({
       name: 'Blocked User',
