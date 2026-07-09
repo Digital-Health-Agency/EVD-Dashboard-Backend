@@ -1,9 +1,10 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { MongooseModule } from '@nestjs/mongoose';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { resolve } from 'path';
 import { AuthModule } from './auth/auth.module.js';
+import { envConfig } from './config/env.config.js';
+import { DatabaseModule } from './database/database.module.js';
 import { UserModule } from './modules/user/user.module.js';
 import { NotificationModule } from './modules/notification/notification.module.js';
 import { UploadModule } from './modules/upload/upload.module.js';
@@ -18,10 +19,9 @@ const uploadRoot = resolve(process.cwd(), process.env.UPLOAD_DIR ?? 'uploads');
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: ['.env.local', '.env'],
+      load: [envConfig],
     }),
-    MongooseModule.forRoot(
-      process.env.MONGODB_URI || 'mongodb://localhost:27017/evd',
-    ),
+    DatabaseModule,
     ServeStaticModule.forRoot({
       rootPath: uploadRoot,
       serveRoot: '/uploads',

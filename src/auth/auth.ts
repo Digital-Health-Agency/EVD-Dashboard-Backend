@@ -1,16 +1,21 @@
 import { betterAuth } from 'better-auth';
-import { mongodbAdapter } from 'better-auth/adapters/mongodb';
+import { kyselyAdapter } from '@better-auth/kysely-adapter';
 import { admin, bearer } from 'better-auth/plugins';
-import { MongoClient } from 'mongodb';
+import { Kysely, PostgresDialect } from 'kysely';
+import { Pool } from 'pg';
 
 import { sendPasswordResetEmail } from './send-password-reset-email.js';
 import { buildResetPasswordUrl } from './reset-link.js';
 import { getRequestAppIdFromHeaders } from '../common/app-id.js';
 
-const client = new MongoClient(
-  process.env.MONGODB_URI || 'mongodb://localhost:27017/evd',
-);
-const db = client.db();
+const pool = new Pool({
+  connectionString:
+    process.env.DATABASE_URL ||
+    'postgres://postgres:postgres@localhost:5432/evd',
+});
+const db = new Kysely({
+  dialect: new PostgresDialect({ pool }),
+});
 
 /** Public origin of this Nest app (Better Auth links, callbacks, auth.api). */
 function authBaseUrl(): string {
@@ -23,7 +28,9 @@ function authBaseUrl(): string {
 }
 
 export const auth = betterAuth({
-  database: mongodbAdapter(db, { client }),
+  database: kyselyAdapter(db as never, {
+    type: 'postgres',
+  }),
   baseURL: authBaseUrl(),
   basePath: '/api/auth',
   emailAndPassword: {
