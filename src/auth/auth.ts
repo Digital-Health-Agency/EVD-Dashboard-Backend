@@ -1,3 +1,4 @@
+import '../load-env.js';
 import { betterAuth } from 'better-auth';
 import { kyselyAdapter } from '@better-auth/kysely-adapter';
 import { admin, bearer } from 'better-auth/plugins';

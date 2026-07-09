@@ -56,9 +56,6 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }
 
   async ensureSchema(): Promise<void> {
-    console.log('Ensuring schema...');
-    console.log('skipDbSchemaSync:', this.configService?.get<boolean>('env.skipDbSchemaSync'));
-    console.log('databaseUrl:', this.configService?.get<string>('env.databaseUrl'));
     await this.pool.query(`
       CREATE TABLE IF NOT EXISTS "user" (
         id text PRIMARY KEY,
