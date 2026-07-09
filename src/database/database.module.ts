@@ -1,6 +1,8 @@
 import {
   Global,
   Inject,
+  Injectable,
+  Logger,
   Module,
   OnModuleDestroy,
   OnModuleInit,
@@ -18,15 +20,38 @@ export interface Queryable {
   ): Promise<{ rows: T[]; rowCount: number | null }>;
 }
 
+@Injectable()
 export class DatabaseService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(DatabaseService.name);
+
   constructor(
     @Inject(POSTGRES_POOL) private readonly pool: Pool,
     @Optional() private readonly configService?: ConfigService,
   ) {}
 
   async onModuleInit(): Promise<void> {
+    const connectionString =
+      this.configService?.get<string>('env.databaseUrl') ??
+      this.pool.options.connectionString;
+    if (connectionString) {
+      this.logger.log(
+        `PostgreSQL configured: ${this.formatConnectionDetails(connectionString)}`,
+      );
+    }
+
     if (this.configService?.get<boolean>('env.skipDbSchemaSync')) return;
     await this.ensureSchema();
+  }
+
+  private formatConnectionDetails(connectionString: string): string {
+    try {
+      const url = new URL(connectionString);
+      const database = url.pathname.replace(/^\//, '') || undefined;
+      const port = url.port || '5432';
+      return `host=${url.hostname} port=${port} database=${database ?? 'unknown'} user=${url.username || 'unknown'}`;
+    } catch {
+      return 'connection string configured (unable to parse details)';
+    }
   }
 
   async onModuleDestroy(): Promise<void> {
