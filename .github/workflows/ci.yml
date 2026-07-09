@@ -52,6 +52,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Deploy to production
-        run: |
-          curl --request POST '${{ secrets.DEPLOYMENT_WEBHOOK }}' --header 'Authorization: Bearer ${{ secrets.DEPLOYMENT_API_TOKEN }}' --header 'Content-Type: application/json' --data '{"message": "Server deployed successfully"}'
+      # - name: Deploy to production
+      #   run: |
+      #     curl --request POST '${{ secrets.DEPLOYMENT_WEBHOOK }}' --header 'Authorization: Bearer ${{ secrets.DEPLOYMENT_API_TOKEN }}' --header 'Content-Type: application/json' --data '{"message": "Server deployed successfully"}'
