@@ -1,0 +1,4 @@
+# Changelog
+
+## 0.1.0 (2026-07-09)
+- Initial focused DHA EVD backend with auth, users, uploads, mail, SMS, notifications, and health checks.
