@@ -1,60 +1,68 @@
 import { describe, it, expect, afterAll, beforeAll, beforeEach } from 'vitest';
-import { MongoMemoryServer } from 'mongodb-memory-server';
-import { MongoClient, ObjectId } from 'mongodb';
+import { newDb } from 'pg-mem';
+import { Pool } from 'pg';
 
+import { DatabaseService } from '../database/database.module.js';
 import { upsertAdminAuthUser } from './seed-admin.js';
 
 describe('seed-admin script', () => {
-  let mongod: MongoMemoryServer;
-  let client: MongoClient;
+  let pool: Pool;
+  let db: DatabaseService;
 
   beforeAll(async () => {
-    mongod = await MongoMemoryServer.create();
-    client = new MongoClient(mongod.getUri());
-    await client.connect();
+    const memoryDb = newDb();
+    const adapter = memoryDb.adapters.createPg();
+    pool = new adapter.Pool();
+    db = new DatabaseService(pool);
+    await db.ensureSchema();
   });
 
   afterAll(async () => {
-    await client.close();
-    await mongod.stop();
+    await pool.end();
   });
 
   beforeEach(async () => {
-    const db = client.db();
-    await db.collection('user').deleteMany({});
-    await db.collection('account').deleteMany({});
+    await db.query('DELETE FROM account');
+    await db.query('DELETE FROM "user"');
   });
 
   it('creates a credential account for an existing admin user without one', async () => {
-    const db = client.db();
-    const userId = new ObjectId();
-    await db.collection('user').insertOne({
-      _id: userId,
-      name: 'Existing Admin',
-      email: 'admin@example.com',
-      emailVerified: true,
-      role: 'user',
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
+    await db.query(
+      `
+        INSERT INTO "user" (
+          id, name, email, "emailVerified", role
+        )
+        VALUES ($1, $2, $3, true, $4)
+      `,
+      ['existing-admin-id', 'Existing Admin', 'admin@example.com', 'user'],
+    );
 
-    await upsertAdminAuthUser(db, {
+    const result = await upsertAdminAuthUser(pool, {
       fullName: 'Existing Admin',
       email: 'ADMIN@example.com',
       password: 'password123',
     });
 
-    const user = await db.collection('user').findOne({ _id: userId });
-    const account = await db.collection('account').findOne({ userId });
+    const user = await db.query<{ role: string; email: string }>(
+      'SELECT role, email FROM "user" WHERE id = $1',
+      ['existing-admin-id'],
+    );
+    const account = await db.query<{
+      userId: string;
+      accountId: string;
+      providerId: string;
+      password: string;
+    }>('SELECT * FROM account WHERE "userId" = $1', ['existing-admin-id']);
 
-    expect(user?.role).toBe('admin');
-    expect(user?.email).toBe('admin@example.com');
-    expect(account).toMatchObject({
-      userId,
-      accountId: userId,
+    expect(result).toMatchObject({ created: false, accountCreated: true });
+    expect(user.rows[0].role).toBe('admin');
+    expect(user.rows[0].email).toBe('admin@example.com');
+    expect(account.rows[0]).toMatchObject({
+      userId: 'existing-admin-id',
+      accountId: 'existing-admin-id',
       providerId: 'credential',
     });
-    expect(account?.password).toEqual(
+    expect(account.rows[0].password).toEqual(
       expect.stringMatching(/^[a-f0-9]+:[a-f0-9]+$/),
     );
   });

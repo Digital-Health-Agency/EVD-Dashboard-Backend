@@ -1,48 +1,42 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
-import { MongooseModule, getModelToken } from '@nestjs/mongoose';
-import { MongoMemoryServer } from 'mongodb-memory-server';
-import { Model } from 'mongoose';
+import { newDb } from 'pg-mem';
+import { Pool } from 'pg';
+
+import { DatabaseService } from '../../database/database.module.js';
 import { NotificationService } from './notification.service.js';
-import {
-  Notification,
-  NotificationSchema,
-  NotificationDocument,
-  NotificationType,
-} from './notification.schema.js';
+import { NotificationType } from './notification.schema.js';
 
 describe('NotificationService', () => {
   let service: NotificationService;
-  let model: Model<NotificationDocument>;
-  let mongod: MongoMemoryServer;
+  let db: DatabaseService;
+  let pool: Pool;
   let module: TestingModule;
 
   beforeAll(async () => {
-    mongod = await MongoMemoryServer.create();
+    const memoryDb = newDb();
+    const adapter = memoryDb.adapters.createPg();
+    pool = new adapter.Pool();
+    db = new DatabaseService(pool);
+    await db.ensureSchema();
 
     module = await Test.createTestingModule({
-      imports: [
-        MongooseModule.forRoot(mongod.getUri()),
-        MongooseModule.forFeature([
-          { name: Notification.name, schema: NotificationSchema },
-        ]),
+      providers: [
+        NotificationService,
+        { provide: DatabaseService, useValue: db },
       ],
-      providers: [NotificationService],
     }).compile();
 
     service = module.get<NotificationService>(NotificationService);
-    model = module.get<Model<NotificationDocument>>(
-      getModelToken(Notification.name),
-    );
   });
 
   afterAll(async () => {
     await module.close();
-    await mongod.stop();
+    await pool.end();
   });
 
   beforeEach(async () => {
-    await model.deleteMany({});
+    await db.query('DELETE FROM notifications');
   });
 
   it('should be defined', () => {
@@ -85,7 +79,7 @@ describe('NotificationService', () => {
       title: 'Cert Ready',
       message: 'Your report is ready',
     });
-    const found = await service.findOne(created._id.toString());
+    const found = await service.findOne(created.id);
     expect(found.title).toBe('Cert Ready');
   });
 
@@ -96,7 +90,7 @@ describe('NotificationService', () => {
       title: 'Old',
       message: 'old msg',
     });
-    const updated = await service.update(created._id.toString(), {
+    const updated = await service.update(created.id, {
       title: 'Updated',
     });
     expect(updated.title).toBe('Updated');
@@ -109,9 +103,11 @@ describe('NotificationService', () => {
       title: 'Delete Me',
       message: 'msg',
     });
-    await service.remove(created._id.toString());
-    const count = await model.countDocuments();
-    expect(count).toBe(0);
+    await service.remove(created.id);
+    const count = await db.query<{ count: string }>(
+      'SELECT count(*)::text AS count FROM notifications',
+    );
+    expect(Number(count.rows[0].count)).toBe(0);
   });
 
   it('should mark a single notification as read', async () => {
@@ -122,7 +118,7 @@ describe('NotificationService', () => {
       message: 'msg',
     });
     expect(created.read).toBe(false);
-    const updated = await service.markAsRead(created._id.toString());
+    const updated = await service.markAsRead(created.id);
     expect(updated.read).toBe(true);
   });
 
@@ -169,7 +165,7 @@ describe('NotificationService', () => {
       title: 'Also Unread',
       message: 'msg2',
     });
-    await service.markAsRead(n1._id.toString());
+    await service.markAsRead(n1.id);
 
     const all = await service.findByRecipient('u1');
     expect(all).toHaveLength(2);

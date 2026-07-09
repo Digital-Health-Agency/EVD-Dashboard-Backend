@@ -2,7 +2,9 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
-import { Db, MongoClient, ObjectId } from 'mongodb';
+import { randomUUID } from 'node:crypto';
+import { Pool } from 'pg';
+import { DatabaseService } from '../database/database.module.js';
 
 // Load .env
 const envPath = path.resolve(process.cwd(), '.env');
@@ -88,69 +90,59 @@ function validateEmail(email: string): boolean {
 }
 
 export async function upsertAdminAuthUser(
-  db: Db,
+  db: Pick<Pool, 'query'>,
   input: { fullName: string; email: string; password: string },
 ): Promise<{ created: boolean; accountCreated: boolean }> {
-  const usersCol = db.collection('user');
-  const accountsCol = db.collection('account');
-  const now = new Date();
   const email = input.email.trim().toLowerCase();
 
-  const existing = await usersCol.findOne({ email });
-  const userId = existing?._id ?? new ObjectId();
+  const existing = await db.query<{ id: string }>(
+    'SELECT id FROM "user" WHERE email = $1',
+    [email],
+  );
+  const userId = existing.rows[0]?.id ?? randomUUID();
   let created = false;
 
-  if (existing) {
-    await usersCol.updateOne(
-      { _id: userId },
-      {
-        $set: {
-          name: input.fullName,
-          email,
-          role: 'admin',
-          updatedAt: now,
-        },
-      },
+  if (existing.rows[0]) {
+    await db.query(
+      'UPDATE "user" SET name = $2, email = $3, role = $4, "updatedAt" = now() WHERE id = $1',
+      [userId, input.fullName, email, 'admin'],
     );
   } else {
     created = true;
-    await usersCol.insertOne({
-      _id: userId,
-      name: input.fullName,
-      email,
-      emailVerified: true,
-      image: null,
-      role: 'admin',
-      banned: false,
-      banReason: null,
-      banExpires: null,
-      createdAt: now,
-      updatedAt: now,
-    });
+    await db.query(
+      `
+        INSERT INTO "user" (
+          id, name, email, "emailVerified", image, role, banned, "banReason", "banExpires"
+        )
+        VALUES ($1, $2, $3, true, null, 'admin', false, null, null)
+      `,
+      [userId, input.fullName, email],
+    );
   }
 
-  const accountResult = await accountsCol.updateOne(
-    {
-      userId,
-      providerId: 'credential',
-    },
-    {
-      $set: {
-        accountId: userId,
-        password: await hashPassword(input.password),
-        updatedAt: now,
-      },
-      $setOnInsert: {
-        _id: new ObjectId(),
-        userId,
-        providerId: 'credential',
-        createdAt: now,
-      },
-    },
-    { upsert: true },
+  const existingAccount = await db.query<{ id: string }>(
+    'SELECT id FROM account WHERE "userId" = $1 AND "providerId" = $2',
+    [userId, 'credential'],
+  );
+  await db.query(
+    `
+      INSERT INTO account (
+        id, "userId", "accountId", "providerId", password
+      )
+      VALUES ($1, $2, $2, 'credential', $3)
+      ON CONFLICT ("providerId", "userId")
+      DO UPDATE SET
+        "accountId" = EXCLUDED."accountId",
+        password = EXCLUDED.password,
+        "updatedAt" = now()
+    `,
+    [randomUUID(), userId, await hashPassword(input.password)],
   );
 
-  return { created, accountCreated: Boolean(accountResult.upsertedId) };
+  return {
+    created,
+    accountCreated: !existingAccount.rows[0],
+  };
 }
 
 async function main() {
@@ -187,15 +179,14 @@ async function main() {
 
   console.log('\nCreating admin user...');
 
-  const MONGODB_URI =
-    process.env.MONGODB_URI || 'mongodb://localhost:27017/evd';
-  const client = new MongoClient(MONGODB_URI);
+  const DATABASE_URL =
+    process.env.DATABASE_URL ||
+    'postgres://postgres:postgres@localhost:5432/evd';
+  const pool = new Pool({ connectionString: DATABASE_URL });
 
   try {
-    await client.connect();
-    const db = client.db();
-
-    const result = await upsertAdminAuthUser(db, {
+    await new DatabaseService(pool).ensureSchema();
+    const result = await upsertAdminAuthUser(pool, {
       fullName,
       email: normalizedEmail,
       password,
@@ -217,7 +208,7 @@ async function main() {
     console.error('Error:', err);
     process.exit(1);
   } finally {
-    await client.close();
+    await pool.end();
   }
 }
 

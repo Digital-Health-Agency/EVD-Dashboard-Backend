@@ -1,9 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { randomUUID } from 'node:crypto';
 import AfricasTalking from 'africastalking';
-import { SmsLog, SmsLogDocument } from './schemas/sms-log.schema';
+import { DatabaseService } from '../../database/database.module.js';
 
 export interface SendSmsResult {
   providerMessageId?: string;
@@ -28,8 +27,7 @@ export class SmsService {
 
   constructor(
     private readonly configService: ConfigService,
-    @InjectModel(SmsLog.name)
-    private readonly smsLogModel: Model<SmsLogDocument>,
+    private readonly db: DatabaseService,
   ) {
     this.provider =
       this.configService.get<string>('SMS_PROVIDER') || 'africastalking';
@@ -50,12 +48,14 @@ export class SmsService {
    * Send SMS message - pure send only, no message building
    */
   async sendSms(phoneNumber: string, message: string): Promise<SendSmsResult> {
-    const smsLog = new this.smsLogModel({
-      recipientPhone: phoneNumber,
-      message,
-      provider: this.provider,
-      status: 'pending',
-    });
+    const smsLogId = randomUUID();
+    await this.db.query(
+      `
+        INSERT INTO sms_logs (id, "recipientPhone", message, provider, status)
+        VALUES ($1, $2, $3, $4, 'pending')
+      `,
+      [smsLogId, phoneNumber, message, this.provider],
+    );
 
     try {
       let providerMessageId: string | undefined;
@@ -76,23 +76,21 @@ export class SmsService {
 
         const messageStatus = firstRecipient?.status;
         if (messageStatus === 'Success' || messageStatus === 'Sent') {
-          smsLog.status = 'sent';
+          await this.updateSmsLog(smsLogId, 'sent', { providerMessageId });
         } else if (messageStatus === 'Failed' || messageStatus === 'Rejected') {
-          smsLog.status = 'failed';
-          smsLog.error = firstRecipient?.status ?? messageStatus;
+          await this.updateSmsLog(smsLogId, 'failed', {
+            providerMessageId,
+            error: firstRecipient?.status ?? messageStatus,
+          });
         } else {
-          smsLog.status = 'sent';
+          await this.updateSmsLog(smsLogId, 'sent', { providerMessageId });
         }
-
-        smsLog.providerMessageId = providerMessageId;
       } else {
         this.logger.warn(
           `SMS provider not configured. Would send to ${phoneNumber}: ${message}`,
         );
-        smsLog.status = 'sent';
+        await this.updateSmsLog(smsLogId, 'sent');
       }
-
-      await smsLog.save();
 
       return { providerMessageId };
     } catch (error: unknown) {
@@ -101,11 +99,27 @@ export class SmsService {
       this.logger.error(
         `Failed to send SMS to ${phoneNumber}: ${errorMessage}`,
       );
-      smsLog.status = 'failed';
-      smsLog.error = errorMessage;
-      await smsLog.save();
+      await this.updateSmsLog(smsLogId, 'failed', { error: errorMessage });
       throw error;
     }
+  }
+
+  private async updateSmsLog(
+    id: string,
+    status: 'pending' | 'sent' | 'delivered' | 'failed',
+    values: { providerMessageId?: string; error?: string } = {},
+  ): Promise<void> {
+    await this.db.query(
+      `
+        UPDATE sms_logs
+        SET status = $2,
+          "providerMessageId" = COALESCE($3, "providerMessageId"),
+          error = COALESCE($4, error),
+          "updatedAt" = now()
+        WHERE id = $1
+      `,
+      [id, status, values.providerMessageId ?? null, values.error ?? null],
+    );
   }
 
   private normalizePhoneNumber(phone: string): string {

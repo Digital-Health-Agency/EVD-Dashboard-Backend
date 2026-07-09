@@ -2,9 +2,9 @@ services:
   server:
     build: .
     ports:
-      - "4000:4000"
+      - '4000:4000'
     environment:
-      - MONGODB_URI=mongodb://mongo:27017/evd
+      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/evd
       - PORT=4000
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
       - BETTER_AUTH_URL=http://localhost:4000
@@ -14,17 +14,21 @@ services:
     volumes:
       - uploads:/app/uploads
     depends_on:
-      - mongo
+      - postgres
     restart: unless-stopped
 
-  mongo:
-    image: mongo:7
+  postgres:
+    image: postgres:16
     ports:
-      - "27017:27017"
+      - '5432:5432'
+    environment:
+      - POSTGRES_DB=evd
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
     volumes:
-      - mongo-data:/data/db
+      - postgres-data:/var/lib/postgresql/data
     restart: unless-stopped
 
 volumes:
-  mongo-data:
+  postgres-data:
   uploads:

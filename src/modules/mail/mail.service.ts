@@ -1,9 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { randomUUID } from 'node:crypto';
 import * as nodemailer from 'nodemailer';
-import { MailLog, MailLogDocument } from './schemas/mail-log.schema';
+import { DatabaseService } from '../../database/database.module.js';
 
 export interface SendMailResult {
   providerMessageId?: string;
@@ -26,8 +25,7 @@ export class MailService {
 
   constructor(
     private readonly configService: ConfigService,
-    @InjectModel(MailLog.name)
-    private readonly mailLogModel: Model<MailLogDocument>,
+    private readonly db: DatabaseService,
   ) {
     this.provider = this.configService.get<string>('MAIL_PROVIDER') || 'smtp';
   }
@@ -62,14 +60,14 @@ export class MailService {
   async sendMail(params: SendMailParams): Promise<SendMailResult> {
     const { to, subject, html, text, attachments } = params;
 
-    const mailLog = new this.mailLogModel({
-      recipientEmail: to,
-      subject,
-      html,
-      text,
-      provider: this.provider,
-      status: 'pending',
-    });
+    const mailLogId = randomUUID();
+    await this.db.query(
+      `
+        INSERT INTO mail_logs (id, "recipientEmail", subject, html, text, provider, status)
+        VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+      `,
+      [mailLogId, to, subject, html ?? null, text ?? null, this.provider],
+    );
 
     try {
       let providerMessageId: string | undefined;
@@ -92,25 +90,40 @@ export class MailService {
           attachments,
         })) as unknown as { messageId?: string };
         providerMessageId = info.messageId;
-        mailLog.status = 'sent';
-        mailLog.providerMessageId = providerMessageId;
+        await this.updateMailLog(mailLogId, 'sent', {
+          providerMessageId,
+        });
       } else {
         this.logger.warn(
           `Mail provider not configured. Would send to ${to}: ${subject}`,
         );
-        mailLog.status = 'sent';
+        await this.updateMailLog(mailLogId, 'sent');
       }
-
-      await mailLog.save();
 
       return { providerMessageId };
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(`Failed to send mail to ${to}: ${message}`);
-      mailLog.status = 'failed';
-      mailLog.error = message;
-      await mailLog.save();
+      await this.updateMailLog(mailLogId, 'failed', { error: message });
       throw error;
     }
+  }
+
+  private async updateMailLog(
+    id: string,
+    status: 'pending' | 'sent' | 'delivered' | 'failed',
+    values: { providerMessageId?: string; error?: string } = {},
+  ): Promise<void> {
+    await this.db.query(
+      `
+        UPDATE mail_logs
+        SET status = $2,
+          "providerMessageId" = COALESCE($3, "providerMessageId"),
+          error = COALESCE($4, error),
+          "updatedAt" = now()
+        WHERE id = $1
+      `,
+      [id, status, values.providerMessageId ?? null, values.error ?? null],
+    );
   }
 }

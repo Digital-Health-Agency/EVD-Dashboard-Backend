@@ -7,17 +7,12 @@ import {
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
-import { SmsLog, SmsLogDocument } from './schemas/sms-log.schema';
+import { DatabaseService } from '../../database/database.module.js';
 import { SmsDeliveryCallbackDto } from './dto/sms-delivery-callback.dto';
 
 @Controller({ path: 'sms', version: '1' })
 export class SmsController {
-  constructor(
-    @InjectModel(SmsLog.name)
-    private readonly smsLogModel: Model<SmsLogDocument>,
-  ) {}
+  constructor(private readonly db: DatabaseService) {}
 
   /**
    * Africa's Talking SMS delivery report callback.
@@ -42,24 +37,29 @@ export class SmsController {
       const isDelivered = status === 'Success';
       const isFailed = status === 'Failed' || status === 'Rejected';
 
-      await this.smsLogModel
-        .updateOne(
-          { providerMessageId },
-          {
-            $set: {
-              deliveryStatus: status,
-              ...(isDelivered && {
-                status: 'delivered',
-                deliveredAt: new Date(),
-              }),
-              ...(isFailed && {
-                status: 'failed',
-                error: failureReason ?? status,
-              }),
-            },
-          },
-        )
-        .exec();
+      await this.db.query(
+        `
+          UPDATE sms_logs
+          SET
+            "deliveryStatus" = $2,
+            status = CASE
+              WHEN $3 THEN 'delivered'
+              WHEN $4 THEN 'failed'
+              ELSE status
+            END,
+            "deliveredAt" = CASE WHEN $3 THEN now() ELSE "deliveredAt" END,
+            error = CASE WHEN $4 THEN $5 ELSE error END,
+            "updatedAt" = now()
+          WHERE "providerMessageId" = $1
+        `,
+        [
+          providerMessageId,
+          status,
+          isDelivered,
+          isFailed,
+          failureReason ?? status,
+        ],
+      );
     }
 
     return { success: true };

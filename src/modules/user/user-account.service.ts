@@ -1,24 +1,14 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { randomBytes, scrypt } from 'node:crypto';
-import { ObjectId } from 'mongodb';
-import { Model } from 'mongoose';
+import { randomBytes, randomUUID, scrypt } from 'node:crypto';
 
+import { DatabaseService } from '../../database/database.module.js';
 import type {
   AuthRole,
   CreateUserDto,
   UpdateMeDto,
   UpdateUserDto,
 } from './dto/user-account.dto.js';
-import {
-  AuthAccount,
-  AuthSession,
-  AuthUser,
-  type AuthAccountDocument,
-  type AuthSessionDocument,
-  type AuthUserDocument,
-  type StoredAuthId,
-} from './user-account.schema.js';
+import type { AuthUserRecord, StoredAuthId } from './user-account.schema.js';
 import {
   USER_INVITE_SENDER,
   type UserInviteSender,
@@ -27,41 +17,16 @@ import type { RequestAppId } from '../../common/app-id.js';
 
 const allowedRoles = new Set<AuthRole>(['user', 'admin']);
 
-interface AuthUserRecord {
-  _id: StoredAuthId;
-  name?: string;
-  email?: string;
-  emailVerified?: boolean;
-  image?: string | null;
-  role?: string;
-  banned?: boolean | null;
-  banReason?: string | null;
-  banExpires?: Date | null;
-  createdAt?: Date;
-  updatedAt?: Date;
-}
-
 @Injectable()
 export class UserAccountService {
   constructor(
-    @InjectModel(AuthUser.name)
-    private readonly authUserModel: Model<AuthUserDocument>,
-    @InjectModel(AuthAccount.name)
-    private readonly authAccountModel: Model<AuthAccountDocument>,
-    @InjectModel(AuthSession.name)
-    private readonly authSessionModel: Model<AuthSessionDocument>,
+    private readonly db: DatabaseService,
     @Inject(USER_INVITE_SENDER)
     private readonly inviteSender: UserInviteSender,
   ) {}
 
   private normalizeEmail(email: string): string {
     return email.trim().toLowerCase();
-  }
-
-  private idCandidates(id: string | StoredAuthId): StoredAuthId[] {
-    if (id instanceof ObjectId) return [id, id.toHexString()];
-    const raw = String(id);
-    return ObjectId.isValid(raw) ? [raw, new ObjectId(raw)] : [raw];
   }
 
   private normalizeRole(role?: string): AuthRole {
@@ -91,7 +56,7 @@ export class UserAccountService {
     const email = user.email ? this.normalizeEmail(user.email) : '';
     const status = user.banned ? 'inactive' : 'active';
     return {
-      id: String(user._id),
+      id: String(user.id),
       name: user.name ?? '',
       fullName: user.name ?? '',
       email,
@@ -108,10 +73,11 @@ export class UserAccountService {
   }
 
   private async getUserRecord(id: string): Promise<AuthUserRecord> {
-    const user = await this.authUserModel
-      .findOne({ _id: { $in: this.idCandidates(id) } })
-      .lean<AuthUserRecord>()
-      .exec();
+    const result = await this.db.query<AuthUserRecord>(
+      'SELECT * FROM "user" WHERE id = $1',
+      [id],
+    );
+    const user = result.rows[0];
     if (!user) throw new NotFoundException(`User ${id} not found`);
     return user;
   }
@@ -121,38 +87,44 @@ export class UserAccountService {
     appId: RequestAppId = 'unknown',
   ): Promise<Record<string, unknown>> {
     const email = this.normalizeEmail(dto.email);
-    const existing = await this.authUserModel.findOne({ email }).lean().exec();
-    if (existing) throw new Error('User with this email already exists');
+    const existing = await this.db.query<AuthUserRecord>(
+      'SELECT * FROM "user" WHERE email = $1',
+      [email],
+    );
+    if (existing.rows[0])
+      throw new Error('User with this email already exists');
 
-    const now = new Date();
-    const userId = new ObjectId();
+    const userId = randomUUID();
     const role = this.normalizeRole(dto.role);
-    const user: AuthUserRecord = {
-      _id: userId,
-      name: dto.name.trim(),
-      email,
-      emailVerified: true,
-      image: null,
-      role,
-      banned: false,
-      banReason: null,
-      banExpires: null,
-      createdAt: now,
-      updatedAt: now,
-    };
+    const user = await this.db.transaction(async (client) => {
+      const created = await client.query<AuthUserRecord>(
+        `
+          INSERT INTO "user" (
+            id, name, email, "emailVerified", image, role, banned,
+            "banReason", "banExpires"
+          )
+          VALUES ($1, $2, $3, true, null, $4, false, null, null)
+          RETURNING *
+        `,
+        [userId, dto.name.trim(), email, role],
+      );
 
-    await this.authUserModel.create(user);
-    if (dto.password) {
-      await this.authAccountModel.create({
-        _id: new ObjectId(),
-        userId,
-        accountId: userId,
-        providerId: 'credential',
-        password: await this.hashPassword(dto.password),
-        createdAt: now,
-        updatedAt: now,
-      });
-    } else {
+      if (dto.password) {
+        await client.query(
+          `
+            INSERT INTO account (
+              id, "userId", "accountId", "providerId", password
+            )
+            VALUES ($1, $2, $2, 'credential', $3)
+          `,
+          [randomUUID(), userId, await this.hashPassword(dto.password)],
+        );
+      }
+
+      return created.rows[0];
+    });
+
+    if (!dto.password) {
       await this.inviteSender.sendInvite({ appId, email });
     }
 
@@ -170,31 +142,33 @@ export class UserAccountService {
     page: number;
     limit: number;
   }> {
-    const filter: Record<string, unknown> = {};
+    const conditions: string[] = [];
+    const values: unknown[] = [];
     if (search) {
-      filter.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } },
-        { role: { $regex: search, $options: 'i' } },
-      ];
+      values.push(`%${search}%`);
+      conditions.push(
+        `(name ILIKE $${values.length} OR email ILIKE $${values.length} OR role ILIKE $${values.length})`,
+      );
     }
-    if (status === 'active') filter.banned = { $ne: true };
-    if (status === 'inactive') filter.banned = true;
+    if (status === 'active') conditions.push('banned = false');
+    if (status === 'inactive') conditions.push('banned = true');
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const offset = (page - 1) * limit;
 
     const [data, total] = await Promise.all([
-      this.authUserModel
-        .find(filter)
-        .sort({ createdAt: -1 })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .lean<AuthUserRecord[]>()
-        .exec(),
-      this.authUserModel.countDocuments(filter).exec(),
+      this.db.query<AuthUserRecord>(
+        `SELECT * FROM "user" ${where} ORDER BY "createdAt" DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+        [...values, limit, offset],
+      ),
+      this.db.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM "user" ${where}`,
+        values,
+      ),
     ]);
 
     return {
-      data: data.map((user) => this.serialize(user)),
-      total,
+      data: data.rows.map((user) => this.serialize(user)),
+      total: Number(total.rows[0].count),
       page,
       limit,
     };
@@ -212,103 +186,107 @@ export class UserAccountService {
     id: string,
     dto: UpdateMeDto,
   ): Promise<Record<string, unknown>> {
-    const set: Record<string, unknown> = { updatedAt: new Date() };
-    if (dto.name !== undefined) set.name = dto.name.trim();
-    if (dto.image !== undefined) set.image = dto.image?.trim() || null;
-
-    const updated = await this.authUserModel
-      .findOneAndUpdate(
-        { _id: { $in: this.idCandidates(id) } },
-        { $set: set },
-        { returnDocument: 'after' },
-      )
-      .lean<AuthUserRecord>()
-      .exec();
-    if (!updated) throw new NotFoundException(`User ${id} not found`);
-    return this.serialize(updated);
+    const current = await this.getUserRecord(id);
+    const updated = await this.db.query<AuthUserRecord>(
+      `
+        UPDATE "user"
+        SET name = $2, image = $3, "updatedAt" = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [
+        id,
+        dto.name !== undefined ? dto.name.trim() : current.name,
+        dto.image !== undefined ? dto.image?.trim() || null : current.image,
+      ],
+    );
+    return this.serialize(updated.rows[0]);
   }
 
   async update(
     id: string,
     dto: UpdateUserDto,
   ): Promise<Record<string, unknown>> {
-    const set: Record<string, unknown> = { updatedAt: new Date() };
-    if (dto.name !== undefined) set.name = dto.name.trim();
+    const current = await this.getUserRecord(id);
     if (dto.email !== undefined) {
       const email = this.normalizeEmail(dto.email);
-      const existing = await this.authUserModel
-        .findOne({
-          email,
-          _id: { $nin: this.idCandidates(id) },
-        })
-        .lean()
-        .exec();
-      if (existing) throw new Error('User with this email already exists');
-      set.email = email;
-    }
-    if (dto.role !== undefined) set.role = this.normalizeRole(dto.role);
-    if (dto.banned !== undefined) {
-      set.banned = dto.banned;
-      if (!dto.banned) {
-        set.banReason = null;
-        set.banExpires = null;
-      }
+      const existing = await this.db.query<AuthUserRecord>(
+        'SELECT * FROM "user" WHERE email = $1 AND id <> $2',
+        [email, id],
+      );
+      if (existing.rows[0])
+        throw new Error('User with this email already exists');
     }
 
-    const updated = await this.authUserModel
-      .findOneAndUpdate(
-        { _id: { $in: this.idCandidates(id) } },
-        { $set: set },
-        { returnDocument: 'after' },
-      )
-      .lean<AuthUserRecord>()
-      .exec();
-    if (!updated) throw new NotFoundException(`User ${id} not found`);
-    return this.serialize(updated);
+    const banned =
+      dto.banned !== undefined ? dto.banned : Boolean(current.banned);
+    const result = await this.db.query<AuthUserRecord>(
+      `
+        UPDATE "user"
+        SET
+          name = $2,
+          email = $3,
+          role = $4,
+          banned = $5,
+          "banReason" = $6,
+          "banExpires" = $7,
+          "updatedAt" = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [
+        id,
+        dto.name !== undefined ? dto.name.trim() : current.name,
+        dto.email !== undefined
+          ? this.normalizeEmail(dto.email)
+          : current.email,
+        dto.role !== undefined ? this.normalizeRole(dto.role) : current.role,
+        banned,
+        dto.banned === false ? null : (current.banReason ?? null),
+        dto.banned === false ? null : (current.banExpires ?? null),
+      ],
+    );
+    return this.serialize(result.rows[0]);
   }
 
   async deactivate(
     id: string,
     reason?: string,
   ): Promise<Record<string, unknown>> {
-    const updated = await this.authUserModel
-      .findOneAndUpdate(
-        { _id: { $in: this.idCandidates(id) } },
-        {
-          $set: {
-            banned: true,
-            banReason: reason || 'Account deactivated',
-            banExpires: null,
-            updatedAt: new Date(),
-          },
-        },
-        { returnDocument: 'after' },
-      )
-      .lean<AuthUserRecord>()
-      .exec();
-    if (!updated) throw new NotFoundException(`User ${id} not found`);
+    const result = await this.db.query<AuthUserRecord>(
+      `
+        UPDATE "user"
+        SET banned = true,
+          "banReason" = $2,
+          "banExpires" = null,
+          "updatedAt" = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [id, reason || 'Account deactivated'],
+    );
+    const user = result.rows[0];
+    if (!user) throw new NotFoundException(`User ${id} not found`);
     await this.revokeSessions(id);
-    return this.serialize(updated);
+    return this.serialize(user);
   }
 
   async activate(id: string): Promise<Record<string, unknown>> {
-    const updated = await this.authUserModel
-      .findOneAndUpdate(
-        { _id: { $in: this.idCandidates(id) } },
-        {
-          $set: {
-            banned: false,
-            banReason: null,
-            banExpires: null,
-            updatedAt: new Date(),
-          },
-        },
-        { returnDocument: 'after' },
-      )
-      .lean<AuthUserRecord>()
-      .exec();
-    if (!updated) throw new NotFoundException(`User ${id} not found`);
-    return this.serialize(updated);
+    const result = await this.db.query<AuthUserRecord>(
+      `
+        UPDATE "user"
+        SET banned = false,
+          "banReason" = null,
+          "banExpires" = null,
+          "updatedAt" = now()
+        WHERE id = $1
+        RETURNING *
+      `,
+      [id],
+    );
+    const user = result.rows[0];
+    if (!user) throw new NotFoundException(`User ${id} not found`);
+    return this.serialize(user);
   }
 
   async setPassword(
@@ -316,52 +294,34 @@ export class UserAccountService {
     password: string,
   ): Promise<Record<string, unknown>> {
     const user = await this.getUserRecord(id);
-    const now = new Date();
-    await this.authAccountModel
-      .updateOne(
-        {
-          providerId: 'credential',
-          userId: { $in: this.idCandidates(id) },
-        },
-        {
-          $set: {
-            password: await this.hashPassword(password),
-            updatedAt: now,
-          },
-          $setOnInsert: {
-            _id: new ObjectId(),
-            userId: user._id,
-            accountId: user._id,
-            providerId: 'credential',
-            createdAt: now,
-          },
-        },
-        { upsert: true },
-      )
-      .exec();
+    const hashedPassword = await this.hashPassword(password);
+    await this.db.query(
+      `
+        INSERT INTO account (
+          id, "userId", "accountId", "providerId", password
+        )
+        VALUES ($1, $2, $2, 'credential', $3)
+        ON CONFLICT ("providerId", "userId")
+        DO UPDATE SET password = EXCLUDED.password, "updatedAt" = now()
+      `,
+      [randomUUID(), user.id, hashedPassword],
+    );
     return this.serialize(user);
   }
 
   async remove(id: string): Promise<void> {
     const user = await this.getUserRecord(id);
-    const candidates = this.idCandidates(id);
-    await Promise.all([
-      this.authUserModel.deleteOne({ _id: user._id }).exec(),
-      this.authAccountModel
-        .deleteMany({
-          $or: [
-            { userId: { $in: candidates } },
-            { accountId: { $in: candidates } },
-          ],
-        })
-        .exec(),
-      this.authSessionModel.deleteMany({ userId: { $in: candidates } }).exec(),
-    ]);
+    await this.db.transaction(async (client) => {
+      await client.query('DELETE FROM session WHERE "userId" = $1', [user.id]);
+      await client.query(
+        'DELETE FROM account WHERE "userId" = $1 OR "accountId" = $1',
+        [user.id],
+      );
+      await client.query('DELETE FROM "user" WHERE id = $1', [user.id]);
+    });
   }
 
-  private async revokeSessions(id: string): Promise<void> {
-    await this.authSessionModel
-      .deleteMany({ userId: { $in: this.idCandidates(id) } })
-      .exec();
+  private async revokeSessions(id: StoredAuthId): Promise<void> {
+    await this.db.query('DELETE FROM session WHERE "userId" = $1', [id]);
   }
 }

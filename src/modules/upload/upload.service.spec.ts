@@ -1,39 +1,38 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
-import { MongooseModule, getModelToken } from '@nestjs/mongoose';
-import { MongoMemoryServer } from 'mongodb-memory-server';
-import { Model } from 'mongoose';
+import { newDb } from 'pg-mem';
+import { Pool } from 'pg';
+
+import { DatabaseService } from '../../database/database.module.js';
 import { UploadService } from './upload.service.js';
-import { Media, MediaSchema, MediaDocument } from './media.schema.js';
 
 describe('UploadService', () => {
   let service: UploadService;
-  let model: Model<MediaDocument>;
-  let mongod: MongoMemoryServer;
+  let db: DatabaseService;
+  let pool: Pool;
   let module: TestingModule;
 
   beforeAll(async () => {
-    mongod = await MongoMemoryServer.create();
+    const memoryDb = newDb();
+    const adapter = memoryDb.adapters.createPg();
+    pool = new adapter.Pool();
+    db = new DatabaseService(pool);
+    await db.ensureSchema();
 
     module = await Test.createTestingModule({
-      imports: [
-        MongooseModule.forRoot(mongod.getUri()),
-        MongooseModule.forFeature([{ name: Media.name, schema: MediaSchema }]),
-      ],
-      providers: [UploadService],
+      providers: [UploadService, { provide: DatabaseService, useValue: db }],
     }).compile();
 
     service = module.get<UploadService>(UploadService);
-    model = module.get<Model<MediaDocument>>(getModelToken(Media.name));
   });
 
   afterAll(async () => {
     await module.close();
-    await mongod.stop();
+    await pool.end();
   });
 
   beforeEach(async () => {
-    await model.deleteMany({});
+    await db.query('DELETE FROM media');
   });
 
   it('should be defined', () => {
@@ -56,20 +55,24 @@ describe('UploadService', () => {
   });
 
   it('should find all media with pagination', async () => {
-    await model.create({
-      filename: 'f1.jpg',
-      originalName: 'File 1',
-      mimeType: 'image/jpeg',
-      size: 100,
-      path: '/uploads/f1.jpg',
-    });
-    await model.create({
-      filename: 'f2.png',
-      originalName: 'File 2',
-      mimeType: 'image/png',
-      size: 200,
-      path: '/uploads/f2.png',
-    });
+    await service.saveFile(
+      {
+        filename: 'f1.jpg',
+        originalname: 'File 1',
+        mimetype: 'image/jpeg',
+        size: 100,
+      } as Express.Multer.File,
+      'user-1',
+    );
+    await service.saveFile(
+      {
+        filename: 'f2.png',
+        originalname: 'File 2',
+        mimetype: 'image/png',
+        size: 200,
+      } as Express.Multer.File,
+      'user-1',
+    );
 
     const result = await service.findAll(1, 10);
     expect(result.data).toHaveLength(2);
@@ -77,14 +80,16 @@ describe('UploadService', () => {
   });
 
   it('should find one media by id', async () => {
-    const created = await model.create({
-      filename: 'f1.jpg',
-      originalName: 'File 1',
-      mimeType: 'image/jpeg',
-      size: 100,
-      path: '/uploads/f1.jpg',
-    });
-    const found = await service.findOne(created._id.toString());
+    const created = await service.saveFile(
+      {
+        filename: 'f1.jpg',
+        originalname: 'File 1',
+        mimetype: 'image/jpeg',
+        size: 100,
+      } as Express.Multer.File,
+      'user-1',
+    );
+    const found = await service.findOne(created.id);
     expect(found.originalName).toBe('File 1');
   });
 });

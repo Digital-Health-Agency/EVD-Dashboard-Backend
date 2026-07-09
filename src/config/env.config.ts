@@ -1,5 +1,10 @@
-export const envConfig = {
-  mongoUri: process.env.MONGODB_URI || 'mongodb://localhost:27017/evd',
+import { registerAs } from '@nestjs/config';
+
+export const envConfig = registerAs('env', () => ({
+  databaseUrl:
+    process.env.DATABASE_URL ||
+    'postgres://postgres:postgres@localhost:5432/evd',
+  skipDbSchemaSync: process.env.SKIP_DB_SCHEMA_SYNC === 'true',
   port: parseInt(process.env.PORT || '4000', 10),
   betterAuthSecret: process.env.BETTER_AUTH_SECRET || 'dev-secret-change-me',
   trustedOrigins: (
@@ -8,4 +13,4 @@ export const envConfig = {
   ).split(','),
   cookieDomain: process.env.COOKIE_DOMAIN || 'localhost',
   uploadDir: process.env.UPLOAD_DIR || 'uploads',
-};
+}));
