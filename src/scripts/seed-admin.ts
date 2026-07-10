@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
+import { resolveAuthDatabaseUrl } from '../config/env.config.js';
 import { DatabaseService } from '../database/database.module.js';
 
 // Load .env
@@ -179,10 +180,7 @@ async function main() {
 
   console.log('\nCreating admin user...');
 
-  const DATABASE_URL =
-    process.env.DATABASE_URL ||
-    'postgres://postgres:postgres@localhost:5432/evd';
-  const pool = new Pool({ connectionString: DATABASE_URL });
+  const pool = new Pool({ connectionString: resolveAuthDatabaseUrl() });
 
   try {
     await new DatabaseService(pool).ensureSchema();

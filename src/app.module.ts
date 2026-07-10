@@ -10,6 +10,7 @@ import { NotificationModule } from './modules/notification/notification.module.j
 import { UploadModule } from './modules/upload/upload.module.js';
 import { MailModule } from './modules/mail/mail.module.js';
 import { SmsModule } from './modules/sms/sms.module.js';
+import { AnalyticsModule } from './modules/analytics/analytics.module.js';
 import { HealthController } from './health.controller.js';
 
 const uploadRoot = resolve(process.cwd(), process.env.UPLOAD_DIR ?? 'uploads');
@@ -32,6 +33,7 @@ const uploadRoot = resolve(process.cwd(), process.env.UPLOAD_DIR ?? 'uploads');
     NotificationModule,
     MailModule,
     SmsModule,
+    AnalyticsModule,
   ],
   controllers: [HealthController],
 })

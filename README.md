@@ -61,17 +61,19 @@ Use `x-evd-app-id: dashboard` when a request needs dashboard-specific reset-link
 
 ## Environment Variables
 
-| Variable             | Default                                           | Description                  |
-| -------------------- | ------------------------------------------------- | ---------------------------- |
-| `DATABASE_URL`       | `postgres://postgres:postgres@localhost:5432/evd` | PostgreSQL connection string |
-| `PORT`               | `4000`                                            | HTTP port                    |
-| `BETTER_AUTH_SECRET` | required                                          | Better Auth secret           |
-| `BETTER_AUTH_URL`    | `http://localhost:4000`                           | Public API URL used by auth  |
-| `TRUSTED_ORIGINS`    | `http://localhost:4000,http://localhost:3000`     | CORS and auth origins        |
-| `DASHBOARD_APP_URL`  | `http://localhost:3000`                           | Password reset destination   |
-| `UPLOAD_DIR`         | `uploads`                                         | Disk upload directory        |
-| `MAIL_FROM_NAME`     | `DHA EVD`                                         | Outbound mail sender name    |
-| `SMS_SENDER_ID`      | `DHAEVD`                                          | SMS sender ID                |
+| Variable                 | Default                                                     | Description                                            |
+| ------------------------ | ----------------------------------------------------------- | ------------------------------------------------------ |
+| `AUTH_DATABASE_URL`      | `postgres://postgres:postgres@localhost:5432/evd`           | Auth and backend metadata PostgreSQL connection string |
+| `ANALYTICS_DATABASE_URL` | `postgres://warehouse:warehouse123@localhost:5433/warehouse` | Analytics PostgreSQL connection string                 |
+| `DATABASE_URL`           | none                                                        | Legacy auth fallback when `AUTH_DATABASE_URL` is unset |
+| `PORT`                   | `4000`                                                      | HTTP port                                              |
+| `BETTER_AUTH_SECRET`     | required                                                    | Better Auth secret                                     |
+| `BETTER_AUTH_URL`        | `http://localhost:4000`                                     | Public API URL used by auth                            |
+| `TRUSTED_ORIGINS`        | `http://localhost:4000,http://localhost:3000`               | CORS and auth origins                                  |
+| `DASHBOARD_APP_URL`      | `http://localhost:3000`                                     | Password reset destination                             |
+| `UPLOAD_DIR`             | `uploads`                                                   | Disk upload directory                                  |
+| `MAIL_FROM_NAME`         | `DHA EVD`                                                   | Outbound mail sender name                              |
+| `SMS_SENDER_ID`          | `DHAEVD`                                                    | SMS sender ID                                          |
 
 ## Testing
 

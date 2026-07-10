@@ -8,11 +8,10 @@ import { Pool } from 'pg';
 import { sendPasswordResetEmail } from './send-password-reset-email.js';
 import { buildResetPasswordUrl } from './reset-link.js';
 import { getRequestAppIdFromHeaders } from '../common/app-id.js';
+import { resolveAuthDatabaseUrl } from '../config/env.config.js';
 
 const pool = new Pool({
-  connectionString:
-    process.env.DATABASE_URL ||
-    'postgres://postgres:postgres@localhost:5432/evd',
+  connectionString: resolveAuthDatabaseUrl(),
 });
 const db = new Kysely({
   dialect: new PostgresDialect({ pool }),
