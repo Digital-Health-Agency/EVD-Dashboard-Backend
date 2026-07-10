@@ -27,3 +27,7 @@
 ## 1.1.0 (2026-07-10)
 - Add /api/analytics/metrics backed by a dedicated warehouse PostgreSQL database, with separate AUTH_DATABASE_URL and ANALYTICS_DATABASE_URL connection pools.
 
+
+## 1.1.1 (2026-07-10)
+- Add gold analytics schema guide documenting warehouse layers and /api/analytics/metrics payload fields.
+
