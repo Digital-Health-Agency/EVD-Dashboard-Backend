@@ -23,3 +23,7 @@
 - Fix DatabaseService lifecycle hooks by adding `@Injectable()`, restoring schema bootstrap on startup.
 - Log PostgreSQL connection details and server port binding during application setup.
 
+
+## 1.1.0 (2026-07-10)
+- Add /api/analytics/metrics backed by a dedicated warehouse PostgreSQL database, with separate AUTH_DATABASE_URL and ANALYTICS_DATABASE_URL connection pools.
+
