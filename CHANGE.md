@@ -39,3 +39,7 @@
 ## 2.0.0 (2026-07-10)
 - Analytics API computes dashboard delta metrics from 24-hour windows instead of latest reporting date.
 
+
+## 2.0.1 (2026-07-10)
+- Patch release aligned with dashboard v3.0.1; no functional changes.
+
