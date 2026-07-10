@@ -31,3 +31,7 @@
 ## 1.1.1 (2026-07-10)
 - Add gold analytics schema guide documenting warehouse layers and /api/analytics/metrics payload fields.
 
+
+## 1.2.0 (2026-07-10)
+- Coordinated minor release for production deployment.
+
