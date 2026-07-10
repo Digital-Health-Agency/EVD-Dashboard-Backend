@@ -64,7 +64,7 @@ Use `x-evd-app-id: dashboard` when a request needs dashboard-specific reset-link
 | Variable                 | Default                                                     | Description                                            |
 | ------------------------ | ----------------------------------------------------------- | ------------------------------------------------------ |
 | `AUTH_DATABASE_URL`      | `postgres://postgres:postgres@localhost:5432/evd`           | Auth and backend metadata PostgreSQL connection string |
-| `ANALYTICS_DATABASE_URL` | `postgres://postgres:postgres@localhost:5433/evd_analytics` | Analytics PostgreSQL connection string                 |
+| `ANALYTICS_DATABASE_URL` | `postgres://warehouse:warehouse123@localhost:5433/warehouse` | Analytics PostgreSQL connection string                 |
 | `DATABASE_URL`           | none                                                        | Legacy auth fallback when `AUTH_DATABASE_URL` is unset |
 | `PORT`                   | `4000`                                                      | HTTP port                                              |
 | `BETTER_AUTH_SECRET`     | required                                                    | Better Auth secret                                     |

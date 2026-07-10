@@ -3,7 +3,7 @@ import { registerAs } from '@nestjs/config';
 export const DEFAULT_AUTH_DATABASE_URL =
   'postgres://postgres:postgres@localhost:5432/evd';
 export const DEFAULT_ANALYTICS_DATABASE_URL =
-  'postgres://postgres:postgres@localhost:5433/evd_analytics';
+  'postgres://warehouse:warehouse123@localhost:5433/warehouse';
 
 export function resolveAuthDatabaseUrl(): string {
   return (

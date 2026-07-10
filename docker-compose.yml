@@ -5,7 +5,7 @@ services:
       - '4000:4000'
     environment:
       - AUTH_DATABASE_URL=postgres://postgres:postgres@postgres:5432/evd
-      - ANALYTICS_DATABASE_URL=postgres://postgres:postgres@analytics-postgres:5432/evd_analytics
+      - ANALYTICS_DATABASE_URL=postgres://warehouse:warehouse123@analytics-postgres:5432/warehouse
       - PORT=4000
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
       - BETTER_AUTH_URL=http://localhost:4000
@@ -36,9 +36,9 @@ services:
     ports:
       - '5433:5432'
     environment:
-      - POSTGRES_DB=evd_analytics
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=warehouse
+      - POSTGRES_USER=warehouse
+      - POSTGRES_PASSWORD=warehouse123
     volumes:
       - analytics-postgres-data:/var/lib/postgresql/data
     restart: unless-stopped
