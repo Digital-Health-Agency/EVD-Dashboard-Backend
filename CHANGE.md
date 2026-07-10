@@ -43,3 +43,7 @@
 ## 2.0.1 (2026-07-10)
 - Patch release aligned with dashboard v3.0.1; no functional changes.
 
+
+## 3.0.0 (2026-07-10)
+- Major release aligned with dashboard v4.0.0 public dashboard refresh and analytics API coordination.
+
