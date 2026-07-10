@@ -19,7 +19,7 @@ describe('AnalyticsService', () => {
         }
         if (
           sql.includes('FROM gold.report_laboratory_summary') &&
-          sql.includes('latest_tests')
+          sql.includes('tests_24h')
         ) {
           return rows([
             {
@@ -31,7 +31,7 @@ describe('AnalyticsService', () => {
               positivity_pct: 5.785,
               first_test: '2025-07-06',
               last_test: '2026-07-11',
-              latest_tests: 6,
+              tests_24h: 6,
             },
           ]);
         }
@@ -46,7 +46,7 @@ describe('AnalyticsService', () => {
         }
         if (
           sql.includes('FROM gold.report_case_summary') &&
-          sql.includes('latest_case_date')
+          sql.includes('case_24h_window_end')
         ) {
           return rows([
             {
@@ -59,11 +59,11 @@ describe('AnalyticsService', () => {
               tested: 66,
               samples_collected: 14,
               with_specimen_id: 14,
-              latest_cases: 382,
-              latest_confirmed: 0,
-              latest_deaths: 0,
-              latest_recoveries: 0,
-              latest_case_date: '2026-07-08',
+              cases_24h: 382,
+              confirmed_24h: 0,
+              deaths_24h: 0,
+              recoveries_24h: 0,
+              case_24h_window_end: '2026-07-08T09:33:11',
             },
           ]);
         }
@@ -84,7 +84,7 @@ describe('AnalyticsService', () => {
         }
         if (
           sql.includes('FROM gold.report_screening_summary') &&
-          sql.includes('latest_screened')
+          sql.includes('screened_24h')
         ) {
           return rows([
             {
@@ -93,8 +93,8 @@ describe('AnalyticsService', () => {
               alerts: 66,
               confirmed: 0,
               tested: 0,
-              latest_screened: 775,
-              latest_alerts: 3,
+              screened_24h: 775,
+              alerts_24h: 3,
               first_screening: '2026-07-02',
               last_screening: '2026-07-08',
             },
@@ -145,10 +145,13 @@ describe('AnalyticsService', () => {
       'gold.report_laboratory_summary',
     );
     expect(payload.labs.testsDone).toBe(1089);
+    expect(payload.labs.newTested24h).toBe(6);
     expect(payload.labs.pendingResults).toBeNull();
     expect(payload.cases.totalCases).toBe(5059);
+    expect(payload.cases.newCases24h).toBe(382);
     expect(payload.cases.admitted).toBeNull();
     expect(payload.poe.totalScreened).toBe(16809);
+    expect(payload.poe.newScreened24h).toBe(775);
     expect(payload.poe.uniqueTravelers).toBeNull();
     expect(payload.geography.byCounty[0].county).toBe('Nairobi');
     expect(queries.join('\n')).toContain('gold.');
