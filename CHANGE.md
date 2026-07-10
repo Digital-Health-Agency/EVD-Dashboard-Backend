@@ -35,3 +35,7 @@
 ## 1.2.0 (2026-07-10)
 - Coordinated minor release for production deployment.
 
+
+## 2.0.0 (2026-07-10)
+- Analytics API computes dashboard delta metrics from 24-hour windows instead of latest reporting date.
+

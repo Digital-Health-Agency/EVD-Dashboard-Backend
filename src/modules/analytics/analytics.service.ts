@@ -148,9 +148,15 @@ export class AnalyticsService {
 
   private async labSummary() {
     const row = await this.one(`
-      WITH latest AS (
-        SELECT max(end_of_week) AS max_week
-        FROM gold.report_laboratory_summary
+      WITH lab_24h_date AS (
+        SELECT max(activity_date) AS max_date
+        FROM gold.report_geographic_summary
+        WHERE coalesce(laboratory_tests, 0) > 0
+      ),
+      lab_24h AS (
+        SELECT coalesce(sum(laboratory_tests), 0)::int AS tests_24h
+        FROM gold.report_geographic_summary
+        WHERE activity_date = (SELECT max_date FROM lab_24h_date)
       )
       SELECT
         coalesce(sum(total_tests), 0)::int AS tests_done,
@@ -165,7 +171,7 @@ export class AnalyticsService {
         END AS positivity_pct,
         to_char(min(start_of_week), 'YYYY-MM-DD') AS first_test,
         to_char(max(end_of_week), 'YYYY-MM-DD') AS last_test,
-        coalesce(sum(total_tests) FILTER (WHERE end_of_week = (SELECT max_week FROM latest)), 0)::int AS latest_tests
+        coalesce((SELECT tests_24h FROM lab_24h), 0)::int AS tests_24h
       FROM gold.report_laboratory_summary
     `);
 
@@ -183,7 +189,7 @@ export class AnalyticsService {
       avgTatDays: null,
       firstTest: dateString(row.first_test),
       lastTest: dateString(row.last_test),
-      newTested24h: num(row.latest_tests),
+      newTested24h: num(row.tests_24h),
     };
   }
 
@@ -209,9 +215,23 @@ export class AnalyticsService {
 
   private async caseSummary() {
     const row = await this.one(`
-      WITH latest AS (
-        SELECT max(case_date) AS max_date
+      WITH bounds AS (
+        SELECT
+          max(created_at) AS max_created_at,
+          max(case_date) AS max_case_date
         FROM gold.report_case_summary
+      ),
+      base AS (
+        SELECT
+          c.*,
+          CASE
+            WHEN b.max_created_at IS NOT NULL
+              THEN c.created_at >= b.max_created_at - interval '24 hours'
+                AND c.created_at <= b.max_created_at
+            ELSE c.case_date = b.max_case_date
+          END AS in_last_24h
+        FROM gold.report_case_summary c
+        CROSS JOIN bounds b
       )
       SELECT
         coalesce(sum(case_count), 0)::int AS total_cases,
@@ -223,12 +243,15 @@ export class AnalyticsService {
         coalesce(sum(tested_case_count), 0)::int AS tested,
         coalesce(sum(sample_collected_count), 0)::int AS samples_collected,
         count(*) FILTER (WHERE nullif(specimen_id, '') IS NOT NULL)::int AS with_specimen_id,
-        coalesce(sum(case_count) FILTER (WHERE case_date = (SELECT max_date FROM latest)), 0)::int AS latest_cases,
-        coalesce(sum(confirmed_case_count) FILTER (WHERE case_date = (SELECT max_date FROM latest)), 0)::int AS latest_confirmed,
-        coalesce(sum(death_count) FILTER (WHERE case_date = (SELECT max_date FROM latest)), 0)::int AS latest_deaths,
-        coalesce(sum(recovered_case_count) FILTER (WHERE case_date = (SELECT max_date FROM latest)), 0)::int AS latest_recoveries,
-        to_char((SELECT max_date FROM latest), 'YYYY-MM-DD') AS latest_case_date
-      FROM gold.report_case_summary
+        coalesce(sum(case_count) FILTER (WHERE in_last_24h), 0)::int AS cases_24h,
+        coalesce(sum(confirmed_case_count) FILTER (WHERE in_last_24h), 0)::int AS confirmed_24h,
+        coalesce(sum(death_count) FILTER (WHERE in_last_24h), 0)::int AS deaths_24h,
+        coalesce(sum(recovered_case_count) FILTER (WHERE in_last_24h), 0)::int AS recoveries_24h,
+        to_char(
+          (SELECT coalesce(max_created_at, max_case_date::timestamp) FROM bounds),
+          'YYYY-MM-DD"T"HH24:MI:SS'
+        ) AS case_24h_window_end
+      FROM base
     `);
 
     const totalCases = num(row.total_cases);
@@ -241,12 +264,16 @@ export class AnalyticsService {
       deaths: num(row.deaths),
       recoveries: num(row.recoveries),
       admitted: null,
-      newConfirmed24h: num(row.latest_confirmed),
+      newCases24h: num(row.cases_24h),
+      newConfirmed24h: num(row.confirmed_24h),
       newAdmissions24h: null,
-      newRecoveries24h: num(row.latest_recoveries),
-      newDeaths24h: num(row.latest_deaths),
-      latestCases: num(row.latest_cases),
-      latestCaseDate: dateString(row.latest_case_date),
+      newRecoveries24h: num(row.recoveries_24h),
+      newDeaths24h: num(row.deaths_24h),
+      latestCases: num(row.cases_24h),
+      latestCaseDate: dateString(row.case_24h_window_end),
+      last24hWindowEnd: row.case_24h_window_end
+        ? String(row.case_24h_window_end)
+        : null,
       contactsListed: null,
       contactsFollowedUp: null,
       importedCases: null,
@@ -296,9 +323,13 @@ export class AnalyticsService {
           total_tested
         FROM gold.report_screening_summary
       ),
-      latest AS (
+      screening_24h_date AS (
         SELECT max(screening_date) AS max_date
         FROM base
+        WHERE coalesce(screened_value, 0) > 0
+          OR coalesce(total_suspected, 0) > 0
+          OR coalesce(total_confirmed, 0) > 0
+          OR coalesce(total_tested, 0) > 0
       )
       SELECT
         coalesce(sum(total_screening_records), 0)::int AS screening_records,
@@ -306,8 +337,8 @@ export class AnalyticsService {
         coalesce(sum(total_suspected), 0)::int AS alerts,
         coalesce(sum(total_confirmed), 0)::int AS confirmed,
         coalesce(sum(total_tested), 0)::int AS tested,
-        coalesce(sum(screened_value) FILTER (WHERE screening_date = (SELECT max_date FROM latest)), 0)::int AS latest_screened,
-        coalesce(sum(total_suspected) FILTER (WHERE screening_date = (SELECT max_date FROM latest)), 0)::int AS latest_alerts,
+        coalesce(sum(screened_value) FILTER (WHERE screening_date = (SELECT max_date FROM screening_24h_date)), 0)::int AS screened_24h,
+        coalesce(sum(total_suspected) FILTER (WHERE screening_date = (SELECT max_date FROM screening_24h_date)), 0)::int AS alerts_24h,
         to_char(min(screening_date), 'YYYY-MM-DD') AS first_screening,
         to_char(max(screening_date), 'YYYY-MM-DD') AS last_screening
       FROM base
@@ -323,8 +354,10 @@ export class AnalyticsService {
       suspected: num(row.alerts),
       confirmed: num(row.confirmed),
       tested: num(row.tested),
-      latestScreened: num(row.latest_screened),
-      latestAlerts: num(row.latest_alerts),
+      newScreened24h: num(row.screened_24h),
+      newAlerts24h: num(row.alerts_24h),
+      latestScreened: num(row.screened_24h),
+      latestAlerts: num(row.alerts_24h),
       firstScreening: dateString(row.first_screening),
       lastScreening: dateString(row.last_screening),
       note: 'Gold currently provides screening records by point of entry, but not deduplicated traveller counts.',
