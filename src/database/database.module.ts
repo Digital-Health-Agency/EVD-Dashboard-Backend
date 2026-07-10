@@ -12,6 +12,8 @@ import { ConfigService } from '@nestjs/config';
 import { Pool, type QueryResultRow } from 'pg';
 
 export const POSTGRES_POOL = Symbol('POSTGRES_POOL');
+export const AUTH_POSTGRES_POOL = Symbol('AUTH_POSTGRES_POOL');
+export const ANALYTICS_POSTGRES_POOL = Symbol('ANALYTICS_POSTGRES_POOL');
 
 export interface Queryable {
   query<T extends QueryResultRow = QueryResultRow>(
@@ -25,17 +27,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DatabaseService.name);
 
   constructor(
-    @Inject(POSTGRES_POOL) private readonly pool: Pool,
+    @Inject(AUTH_POSTGRES_POOL) private readonly pool: Pool,
     @Optional() private readonly configService?: ConfigService,
   ) {}
 
   async onModuleInit(): Promise<void> {
     const connectionString =
-      this.configService?.get<string>('env.databaseUrl') ??
+      this.configService?.get<string>('env.authDatabaseUrl') ??
       this.pool.options.connectionString;
     if (connectionString) {
       this.logger.log(
-        `PostgreSQL configured: ${this.formatConnectionDetails(connectionString)}`,
+        `Auth PostgreSQL configured: ${this.formatConnectionDetails(connectionString)}`,
       );
     }
 
@@ -201,21 +203,52 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }
 }
 
+@Injectable()
+class AnalyticsPoolLifecycle implements OnModuleDestroy {
+  constructor(
+    @Inject(ANALYTICS_POSTGRES_POOL) private readonly analyticsPool: Pool,
+  ) {}
+
+  async onModuleDestroy(): Promise<void> {
+    await this.analyticsPool.end();
+  }
+}
+
 @Global()
 @Module({
   providers: [
     {
-      provide: POSTGRES_POOL,
+      provide: AUTH_POSTGRES_POOL,
       inject: [ConfigService],
       useFactory: (configService: ConfigService) =>
         new Pool({
           connectionString: configService.getOrThrow<string>(
-            'env.databaseUrl',
+            'env.authDatabaseUrl',
           ),
         }),
     },
+    {
+      provide: POSTGRES_POOL,
+      useExisting: AUTH_POSTGRES_POOL,
+    },
+    {
+      provide: ANALYTICS_POSTGRES_POOL,
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) =>
+        new Pool({
+          connectionString: configService.getOrThrow<string>(
+            'env.analyticsDatabaseUrl',
+          ),
+        }),
+    },
+    AnalyticsPoolLifecycle,
     DatabaseService,
   ],
-  exports: [POSTGRES_POOL, DatabaseService],
+  exports: [
+    POSTGRES_POOL,
+    AUTH_POSTGRES_POOL,
+    ANALYTICS_POSTGRES_POOL,
+    DatabaseService,
+  ],
 })
 export class DatabaseModule {}

@@ -4,7 +4,8 @@ services:
     ports:
       - '4000:4000'
     environment:
-      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/evd
+      - AUTH_DATABASE_URL=postgres://postgres:postgres@postgres:5432/evd
+      - ANALYTICS_DATABASE_URL=postgres://postgres:postgres@analytics-postgres:5432/evd_analytics
       - PORT=4000
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
       - BETTER_AUTH_URL=http://localhost:4000
@@ -15,6 +16,7 @@ services:
       - uploads:/app/uploads
     depends_on:
       - postgres
+      - analytics-postgres
     restart: unless-stopped
 
   postgres:
@@ -29,6 +31,19 @@ services:
       - postgres-data:/var/lib/postgresql/data
     restart: unless-stopped
 
+  analytics-postgres:
+    image: postgres:16
+    ports:
+      - '5433:5432'
+    environment:
+      - POSTGRES_DB=evd_analytics
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - analytics-postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
 volumes:
   postgres-data:
+  analytics-postgres-data:
   uploads:
