@@ -45,6 +45,7 @@ src/
 | ----------------------- | -------------------------------- | ---------------------------------------------- |
 | `*`                     | `/api/auth/*`                    | Better Auth routes                             |
 | `GET`                   | `/health`                        | Public health check                            |
+| `GET`                   | `/api/analytics/metrics`         | Gold-backed dashboard analytics                |
 | CRUD                    | `/api/users`                     | Admin user management                          |
 | `GET/PATCH/POST/DELETE` | `/api/users/me`                  | Current user profile and deactivation/deletion |
 | `POST`                  | `/api/upload`                    | Upload one file and persist media metadata     |
