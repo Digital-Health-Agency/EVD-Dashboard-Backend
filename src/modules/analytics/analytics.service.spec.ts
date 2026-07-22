@@ -11,97 +11,108 @@ describe('AnalyticsService', () => {
   it('maps backend gold analytics into the dashboard payload', async () => {
     const queries: string[] = [];
     const db: Queryable = {
-      query: vi.fn((sql: string) => {
+      query: vi.fn((sql: string, values?: unknown[]) => {
         queries.push(sql);
 
-        if (sql.includes('greatest(')) {
-          return rows([{ last_updated: new Date('2026-07-11T00:00:00.000Z') }]);
+        if (sql.includes('FROM gold.report_lab_result')) {
+          expect(sql).toContain('test_code = $1');
+          expect(values).toEqual(['86518-8']);
+        }
+
+        if (sql.includes('max(updated_at)') && sql.includes(') updates')) {
+          return rows([{ last_updated: '2026-07-16' }]);
         }
         if (
-          sql.includes('FROM gold.report_laboratory_summary') &&
-          sql.includes('tests_24h')
+          sql.includes('FROM gold.report_lab_result') &&
+          sql.includes('avg_tat_days')
         ) {
           return rows([
             {
-              tests_done: 1089,
-              positive: 63,
-              negative: 1026,
+              tests_done: 163,
+              positive: 0,
+              negative: 163,
               inconclusive: 0,
+              other: 0,
               unknown: 0,
-              positivity_pct: 5.785,
-              first_test: '2025-07-06',
-              last_test: '2026-07-11',
-              tests_24h: 6,
+              pending: 0,
+              positivity_pct: 0,
+              patients_tested: 159,
+              avg_tat_days: 149.3,
+              first_test: '2025-09-05',
+              last_test: '2026-07-16',
+              tests_24h: 1,
             },
           ]);
         }
         if (
-          sql.includes('FROM gold.report_laboratory_summary') &&
-          sql.includes('GROUP BY end_of_week')
+          sql.includes('FROM gold.report_lab_result') &&
+          sql.includes('period_end')
         ) {
           return rows([
-            { date: '2026-07-04', tests: 12, positive: 1, negative: 11 },
-            { date: '2026-07-11', tests: 6, positive: 0, negative: 6 },
+            { date: '2026-07-11', tests: 9, positive: 0, negative: 9 },
+            { date: '2026-07-18', tests: 5, positive: 0, negative: 5 },
           ]);
         }
         if (
-          sql.includes('FROM gold.report_case_summary') &&
+          sql.includes('FROM gold.report_case_investigation') &&
           sql.includes('case_24h_window_end')
         ) {
           return rows([
             {
-              total_cases: 5059,
-              suspected: 66,
+              total_cases: 74,
+              suspected: 74,
               probable: 0,
               confirmed: 0,
               deaths: 0,
               recoveries: 0,
-              tested: 66,
-              samples_collected: 14,
-              with_specimen_id: 14,
-              cases_24h: 382,
+              tested: 61,
+              samples_collected: 61,
+              with_specimen_id: 61,
+              cases_24h: 1,
               confirmed_24h: 0,
               deaths_24h: 0,
               recoveries_24h: 0,
-              case_24h_window_end: '2026-07-08T09:33:11',
+              contacts_listed: 59,
+              case_24h_window_end: '2026-07-10T13:24:13',
             },
           ]);
         }
         if (
-          sql.includes('FROM gold.report_case_trend') &&
-          sql.includes('GROUP BY end_of_week')
+          sql.includes('FROM gold.report_case_investigation') &&
+          sql.includes('case_weekly')
         ) {
           return rows([
             {
               date: '2026-07-11',
               epi_week_label: '2026-W28',
-              total_cases: 5059,
-              suspected: 66,
+              total_cases: 74,
+              suspected: 74,
               confirmed: 0,
               deaths: 0,
             },
           ]);
         }
         if (
-          sql.includes('FROM gold.report_screening_summary') &&
+          sql.includes('FROM gold.report_screening') &&
           sql.includes('screened_24h')
         ) {
           return rows([
             {
-              screening_records: 16809,
-              total_screened: 16809,
-              alerts: 66,
+              screening_records: 117687,
+              total_screened: 117687,
+              alerts: 2,
+              suspected: 2,
               confirmed: 0,
               tested: 0,
-              screened_24h: 775,
-              alerts_24h: 3,
-              first_screening: '2026-07-02',
-              last_screening: '2026-07-08',
+              screened_24h: 1116,
+              alerts_24h: 0,
+              first_screening: '2026-05-05',
+              last_screening: '2026-07-15',
             },
           ]);
         }
         if (
-          sql.includes('FROM gold.report_screening_summary') &&
+          sql.includes('FROM gold.report_screening') &&
           sql.includes('GROUP BY 1')
         ) {
           return rows([
@@ -110,14 +121,15 @@ describe('AnalyticsService', () => {
               screening_records: 500,
               screened: 500,
               alerts: 2,
+              suspected: 2,
               confirmed: 0,
               tested: 0,
             },
           ]);
         }
         if (
-          sql.includes('FROM gold.report_geographic_summary') &&
-          sql.includes('GROUP BY 1')
+          sql.includes('geographic_activity') &&
+          sql.includes('FROM gold.report_treatment_outcome')
         ) {
           return rows([
             {
@@ -125,10 +137,10 @@ describe('AnalyticsService', () => {
               total_cases: 6,
               confirmed: 0,
               deaths: 0,
-              screening_records: 10,
-              screened: 10,
-              lab_tests: 399,
-              laboratory_positivity_rate: 0,
+              screening_records: 0,
+              screened: 0,
+              lab_tests: 0,
+              laboratory_positivity_rate: null,
             },
           ]);
         }
@@ -142,19 +154,29 @@ describe('AnalyticsService', () => {
 
     expect(payload.meta.adapter).toBe('backend-postgres');
     expect(payload.meta.provenance.labs.label).toContain(
-      'gold.report_laboratory_summary',
+      'gold.report_lab_result',
     );
-    expect(payload.labs.testsDone).toBe(1089);
-    expect(payload.labs.newTested24h).toBe(6);
-    expect(payload.labs.pendingResults).toBeNull();
-    expect(payload.cases.totalCases).toBe(5059);
-    expect(payload.cases.newCases24h).toBe(382);
+    expect(payload.meta.provenance.clinical.source).toBe('live');
+    expect(payload.labs.testsDone).toBe(163);
+    expect(payload.labs.positive).toBe(0);
+    expect(payload.labs.patientsTested).toBe(159);
+    expect(payload.labs.avgTatDays).toBe(149.3);
+    expect(payload.labs.newTested24h).toBe(1);
+    expect(payload.labs.pendingResults).toBe(0);
+    expect(payload.cases.totalCases).toBe(74);
+    expect(payload.cases.contactsListed).toBe(59);
+    expect(payload.cases.newCases24h).toBe(1);
     expect(payload.cases.admitted).toBeNull();
-    expect(payload.poe.totalScreened).toBe(16809);
-    expect(payload.poe.newScreened24h).toBe(775);
+    expect(payload.poe.totalScreened).toBe(117687);
+    expect(payload.poe.alerts).toBe(2);
+    expect(payload.poe.newScreened24h).toBe(1116);
     expect(payload.poe.uniqueTravelers).toBeNull();
     expect(payload.geography.byCounty[0].county).toBe('Nairobi');
+    expect(payload.geography.byCounty[0].laboratoryPositivityRate).toBeNull();
     expect(queries.join('\n')).toContain('gold.');
     expect(queries.join('\n')).not.toMatch(/\b(bronze|silver|marts)\./);
+    expect(queries.join('\n')).not.toMatch(
+      /report_(case_summary|case_trend|laboratory_summary|screening_summary|geographic_summary)/,
+    );
   });
 });

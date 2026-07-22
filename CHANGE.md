@@ -47,3 +47,7 @@
 ## 3.0.0 (2026-07-10)
 - Major release aligned with dashboard v4.0.0 public dashboard refresh and analytics API coordination.
 
+
+## 3.1.0 (2026-07-22)
+- Align analytics metrics with restored gold warehouse schema, update gold contract documentation, and expand analytics service coverage.
+
