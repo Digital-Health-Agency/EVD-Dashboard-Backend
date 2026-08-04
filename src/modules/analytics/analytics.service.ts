@@ -72,6 +72,7 @@ export class AnalyticsService {
       caseTrend,
       poe,
       poeRows,
+      poeTrend,
       geographyRows,
     ] = await Promise.all([
       this.lastUpdated(),
@@ -81,6 +82,7 @@ export class AnalyticsService {
       this.caseTrend(),
       this.poeSummary(),
       this.poeRows(),
+      this.poeTrend(),
       this.geographyRows(),
     ]);
 
@@ -117,6 +119,7 @@ export class AnalyticsService {
       poe: {
         ...poe,
         byPoe: poeRows,
+        trend: poeTrend,
       },
       geography: {
         available: geographyRows.length > 0,
@@ -504,6 +507,36 @@ export class AnalyticsService {
       lastScreening: dateString(row.last_screening),
       note: 'Screening records are available by point of entry; cross-system traveller deduplication is not yet implemented.',
     };
+  }
+
+  /** Last 14 reporting days of traveller screening, oldest first. */
+  private async poeTrend() {
+    const rows = await this.many(`
+      WITH screening_daily AS (
+        SELECT
+          coalesce(reporting_date, screening_datetime::date) AS day,
+          total_screening_count,
+          flagged_screening_count
+        FROM gold.report_screening
+      )
+      SELECT
+        to_char(day, 'YYYY-MM-DD') AS date,
+        coalesce(sum(total_screening_count), 0)::int AS screened,
+        coalesce(sum(flagged_screening_count), 0)::int AS alerts
+      FROM screening_daily
+      WHERE day IS NOT NULL
+      GROUP BY day
+      ORDER BY day DESC
+      LIMIT 14
+    `);
+
+    return rows
+      .map((row) => ({
+        date: dateString(row.date),
+        screened: num(row.screened),
+        alerts: num(row.alerts),
+      }))
+      .reverse();
   }
 
   private async poeRows() {
