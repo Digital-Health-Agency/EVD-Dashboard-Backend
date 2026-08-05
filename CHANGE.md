@@ -51,3 +51,7 @@
 ## 3.1.0 (2026-07-22)
 - Align analytics metrics with restored gold warehouse schema, update gold contract documentation, and expand analytics service coverage.
 
+
+## 3.2.0 (2026-08-05)
+- Ship analytics and public-landing backend support, and re-enable the production deploy webhook.
+

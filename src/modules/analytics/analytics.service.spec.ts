@@ -113,6 +113,15 @@ describe('AnalyticsService', () => {
         }
         if (
           sql.includes('FROM gold.report_screening') &&
+          sql.includes('screening_daily')
+        ) {
+          return rows([
+            { date: '2026-07-15', screened: 1116, alerts: 0 },
+            { date: '2026-07-14', screened: 980, alerts: 1 },
+          ]);
+        }
+        if (
+          sql.includes('FROM gold.report_screening') &&
           sql.includes('GROUP BY 1')
         ) {
           return rows([
@@ -171,6 +180,10 @@ describe('AnalyticsService', () => {
     expect(payload.poe.alerts).toBe(2);
     expect(payload.poe.newScreened24h).toBe(1116);
     expect(payload.poe.uniqueTravelers).toBeNull();
+    expect(payload.poe.trend.map((point) => point.date)).toEqual([
+      '2026-07-14',
+      '2026-07-15',
+    ]);
     expect(payload.geography.byCounty[0].county).toBe('Nairobi');
     expect(payload.geography.byCounty[0].laboratoryPositivityRate).toBeNull();
     expect(queries.join('\n')).toContain('gold.');
