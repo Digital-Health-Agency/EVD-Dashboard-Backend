@@ -1,9 +1,11 @@
 # EVD Gold Analytics Contract
 
 This document defines the warehouse contract used by
-`GET /api/analytics/metrics`. It reflects the database restored from
-`db/evd_raw_2026-07-21.sql` and the lineage described in
-`dashboard/docs/NDL_EVD_Bronze_Silver_Marts_Gold_Mapping.xlsx.pdf`.
+`GET /api/analytics/metrics`. It reflects the database restored from the
+`evd_raw_2026-07-21.sql` dump (an external artifact, not tracked in this
+repository) and the lineage described in
+`EVD-Reporting-Dashboard/docs/NDL_EVD_Bronze_Silver_Marts_Gold_Mapping.xlsx.pdf`.
+<!-- VERIFY: db/evd_raw_2026-07-21.sql -->
 
 The server queries the `gold` schema only. Bronze, Silver, and Marts remain ETL
 implementation layers and are not API contracts.
