@@ -5,7 +5,7 @@ services:
       - '4000:4000'
     environment:
       - AUTH_DATABASE_URL=postgres://postgres:postgres@postgres:5432/evd
-      - ANALYTICS_DATABASE_URL=postgres://warehouse:warehouse123@analytics-postgres:5432/warehouse
+      - ANALYTICS_DATABASE_URL=${ANALYTICS_DATABASE_URL:-postgres://postgres:postgres@host.docker.internal:5432/evd_raw}
       - PORT=4000
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
       - BETTER_AUTH_URL=http://localhost:4000
@@ -14,9 +14,10 @@ services:
       - UPLOAD_DIR=./uploads
     volumes:
       - uploads:/app/uploads
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     depends_on:
       - postgres
-      - analytics-postgres
     restart: unless-stopped
 
   postgres:

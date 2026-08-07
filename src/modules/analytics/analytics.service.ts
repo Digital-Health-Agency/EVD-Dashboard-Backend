@@ -5,14 +5,14 @@ import {
   ANALYTICS_POSTGRES_POOL,
   type Queryable,
 } from '../../database/database.module.js';
-
-type SourceState = 'live' | 'pending' | 'na';
-
-interface Provenance {
-  source: SourceState;
-  label: string;
-  degraded?: boolean;
-}
+import {
+  dateString,
+  nullableNum,
+  num,
+  pending,
+  source,
+  stringValue,
+} from '../../common/analytics-helpers.js';
 
 interface NumberRow extends QueryResultRow {
   [key: string]: unknown;
@@ -20,42 +20,6 @@ interface NumberRow extends QueryResultRow {
 
 const GOLD_SOURCE = 'gold analytics warehouse';
 const EVD_LAB_TEST_CODE = '86518-8';
-
-function num(value: unknown, fallback = 0): number {
-  if (value === null || value === undefined) return fallback;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function nullableNum(value: unknown): number | null {
-  if (value === null || value === undefined) return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function dateString(value: unknown): string | null {
-  if (!value) return null;
-  if (value instanceof Date) return value.toISOString().slice(0, 10);
-  if (typeof value === 'string') return value.slice(0, 10);
-  if (typeof value === 'number' || typeof value === 'bigint') {
-    return String(value).slice(0, 10);
-  }
-  return null;
-}
-
-function stringValue(value: unknown): string | null {
-  if (typeof value === 'string') return value;
-  if (value instanceof Date) return value.toISOString();
-  return null;
-}
-
-function source(label: string): Provenance {
-  return { source: 'live', label };
-}
-
-function pending(label: string): Provenance {
-  return { source: 'pending', label };
-}
 
 @Injectable()
 export class AnalyticsService {
@@ -509,7 +473,6 @@ export class AnalyticsService {
     };
   }
 
-  /** Last 14 reporting days of traveller screening, oldest first. */
   private async poeTrend() {
     const rows = await this.many(`
       WITH screening_daily AS (
