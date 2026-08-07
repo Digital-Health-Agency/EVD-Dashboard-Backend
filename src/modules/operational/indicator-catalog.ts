@@ -149,6 +149,18 @@ export const INDICATOR_CATALOG: Readonly<
     baselineQualityStatus: POE_BASELINE,
   },
 
+  'hf.screened': {
+    indicatorId: 'hf.screened',
+    displayName: 'Screened',
+    definition:
+      'TAIFACARE_KENYAEMR facility screenings recorded within the selected window, counted from total_screening_count on gold.report_screening.',
+    countingUnit: 'screenings',
+    sourceSystem: ['TAIFACARE_KENYAEMR'],
+    refreshFrequency: 'Near real-time',
+    allowedFilters: HF_ALLOWED_FILTERS,
+    securityClassification: RESTRICTED,
+    baselineQualityStatus: HF_BASELINE,
+  },
   'hf.alerts': {
     indicatorId: 'hf.alerts',
     displayName: 'Alerts',
@@ -211,9 +223,9 @@ export const INDICATOR_CATALOG: Readonly<
   },
   'hf.byFacility': {
     indicatorId: 'hf.byFacility',
-    displayName: 'Alerts and confirmed by facility',
+    displayName: 'Screenings, alerts and confirmed by facility',
     definition:
-      'TAIFACARE_KENYAEMR facility screenings grouped by reporting facility, showing measured alerts alongside confirmed cases fixed at zero.',
+      'TAIFACARE_KENYAEMR facility screenings grouped by reporting facility, showing measured screening volume and alerts alongside confirmed cases fixed at zero.',
     countingUnit: 'screenings',
     sourceSystem: ['TAIFACARE_KENYAEMR'],
     refreshFrequency: 'Near real-time',
@@ -316,7 +328,7 @@ export const INDICATOR_CATALOG: Readonly<
     indicatorId: 'summary.deaths',
     displayName: 'Deaths',
     definition:
-      'Treatment outcomes recorded as deceased within the selected window, counted from deceased_count on gold.report_treatment_outcome. Measured at zero on the current warehouse and rendered as zero.',
+      'Treatment outcomes recorded as deceased within the selected window, counted from deceased_count on gold.report_treatment_outcome. Measured at zero on the current warehouse and rendered as zero. The card carries a case fatality rate beneath the count: the same deaths over final_confirmed_count on gold.report_case_investigation, expressed as a percentage to one decimal. Numerator and denominator are the same expressions this card and the Confirmed cases card use, so the rate reconciles to both under identical filters. The two measures come from separate marts and are not linked case-by-case, so a death and the confirmation it belongs to can fall in different windows — the rate is a window ratio, not a cohort-followed outcome. Where no confirmed case falls in the window the rate is undefined and renders as a dash rather than zero.',
     countingUnit: 'treatment outcomes',
     sourceSystem: ['ADAM'],
     refreshFrequency: 'Daily',
@@ -328,8 +340,10 @@ export const INDICATOR_CATALOG: Readonly<
     indicatorId: 'summary.currentAdmitted',
     displayName: 'Current admitted',
     definition:
-      'Confirmed or probable cases currently admitted. No gold report mart carries an admission measure of any kind, so the indicator carries no value. It is deliberately NOT derived from on_treatment_count on gold.report_treatment_outcome: a treatment status is not an admission fact, and reporting one under this label would answer a different question.',
+      'Confirmed or probable cases currently admitted. Fixed at zero by owner ruling until an admission measure is available: no gold report mart carries one of any kind, so the zero is a placeholder and not a measured count. Nothing on the card itself says so — the detail line describes the indicator rather than its availability, matching its siblings — so this entry is the only record of it. It remains deliberately NOT derived from on_treatment_count on gold.report_treatment_outcome: a treatment status is not an admission fact, and reporting one under this label would answer a different question. The card is filed against gold.report_treatment_outcome because that is the mart a real admission measure would land in, matching how the Health Facilities tab files its own fixed zeros.',
     countingUnit: 'case investigations',
+    sourceSystem: ['ADAM'],
+    refreshFrequency: 'Daily',
     allowedFilters: SUMMARY_ALLOWED_FILTERS,
     securityClassification: RESTRICTED,
     baselineQualityStatus: HF_BASELINE,
