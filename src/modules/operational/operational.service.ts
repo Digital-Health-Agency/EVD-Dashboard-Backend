@@ -856,7 +856,7 @@ export class OperationalService {
       buildCard({
         key: 'alerts',
         label: 'Alerts',
-        tone: 'red',
+        tone: 'amber',
         emphasis: 'important',
         value: caseAgg.alerts,
         detail: 'Case investigations opened as suspected or probable',
