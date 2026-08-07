@@ -431,6 +431,19 @@ describe('LinelistService window resolution', () => {
     expect(row.values).toEqual([50, 0]);
   });
 
+  it('drops the window entirely for the all-time period', async () => {
+    const { service, calls } = harness();
+    await service.signals(parse({ period: 'all' }));
+
+    const row = rowStatement(calls);
+    expect(row.sql).not.toContain('bounds AS (');
+    expect(row.sql).not.toContain('CROSS JOIN bounds');
+    expect(row.sql).not.toContain('interval');
+    expect(row.sql).not.toContain('undefined');
+    expect(row.sql).toContain('event_at IS NOT NULL');
+    expect(row.values).toEqual([50, 0]);
+  });
+
   it('applies a custom range as two bound timestamps with no bounds sub-select', async () => {
     const { service, calls } = harness();
     await service.signals(

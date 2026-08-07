@@ -627,7 +627,7 @@ export function buildLinelistScope(
 ): LinelistScope {
     const params: unknown[] = [];
     const clauses: string[] = [];
-    const anchored = query.period !== 'custom';
+    const anchored = query.period !== 'custom' && query.period !== 'all';
 
     const baseClauses: string[] = [];
     for (const [column, value] of baseFilters) {
@@ -635,7 +635,9 @@ export function buildLinelistScope(
       baseClauses.push(`${column} = $${params.length}`);
     }
 
-    if (anchored) {
+    if (query.period === 'all') {
+      clauses.push('event_at IS NOT NULL');
+    } else if (anchored) {
       const interval = PERIOD_INTERVALS[query.period];
       clauses.push(
         `event_at > bounds.max_event_at - interval '${interval}'` +

@@ -9,7 +9,7 @@ export type TabKey =
   | 'contacts';
 
 export interface TabWindow {
-  period: '24h' | '7d' | '21d' | '42d' | 'custom';
+  period: '24h' | '7d' | '21d' | '42d' | 'all' | 'custom';
   from: string | null;
   to: string | null;
   anchored: boolean;
@@ -44,6 +44,7 @@ export interface TabCardBreakdownEntry {
   key: string;
   label: string;
   value: number | null;
+  unit?: 'count' | 'percent' | 'days' | null;
 }
 
 export interface TabCard {

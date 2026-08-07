@@ -224,6 +224,21 @@ describe('OperationalService.labsTab', () => {
     expect(values[0]).toEqual(['86518-8']);
   });
 
+  it('applies no window at all for the all-time period', async () => {
+    const { payload, queries, values } = await runLabsTab({ period: 'all' });
+    const sql = queries.join('\n');
+
+    expect(sql).toContain('event_at IS NOT NULL');
+    expect(sql).not.toContain('interval');
+    expect(sql).not.toContain('undefined');
+    expect(sql).not.toContain('now()');
+
+    expect(payload.meta.window.anchored).toBe(false);
+    expect(payload.meta.window.period).toBe('all');
+
+    expect(values[0]).toEqual(['86518-8']);
+  });
+
   it('applies a custom range as two bound timestamps rather than an anchored interval', async () => {
     const { payload, queries, values } = await runLabsTab({
       period: 'custom',
@@ -622,6 +637,7 @@ const HF_BREAKDOWN_ROWS = [
   {
     name: 'Suba Sub County Hospital',
     filter_value: 'Suba Sub County Hospital',
+    screened: 9,
     alerts: 0,
     confirmed: 0,
     current_admitted: 0,
@@ -632,6 +648,7 @@ const HF_BREAKDOWN_ROWS = [
   {
     name: 'St Pius Musoli Health Centre',
     filter_value: 'St Pius Musoli Health Centre',
+    screened: 7,
     alerts: 0,
     confirmed: 0,
     current_admitted: 0,
@@ -698,11 +715,12 @@ function nonFiniteValues(payload: unknown): unknown[] {
 }
 
 describe('OperationalService.hfTab', () => {
-  it('returns the five owner-approved cards from the facility screening scope', async () => {
+  it('returns the six owner-approved cards from the facility screening scope', async () => {
     const { payload } = await runHfTab();
 
     expect(payload.meta.tab).toBe('hf');
     expect(payload.cards.map((card) => [card.key, card.label, card.value])).toEqual([
+      ['screened', 'Screened', 16],
       ['alerts', 'Alerts', 0],
       ['confirmed', 'Confirmed', 0],
       ['currentAdmitted', 'Current admitted', 0],
@@ -720,7 +738,8 @@ describe('OperationalService.hfTab', () => {
     for (const key of ['confirmed', 'currentAdmitted', 'recovered', 'deaths']) {
       const card = payload.cards.find((candidate) => candidate.key === key);
       expect(card?.value).toBe(0);
-      expect(card?.detail).toMatch(/not captured in screening data$/);
+      expect(card?.detail).toBeTruthy();
+      expect(card?.detail).not.toMatch(/not captured|not available|no data/i);
       expect(card?.detail).not.toContain('Fixed at zero');
       expect(card?.meta?.dataQualityStatus).not.toBe('unavailable');
     }
@@ -813,6 +832,7 @@ describe('OperationalService.hfTab', () => {
     expect(payload.breakdown?.shown).toBe(2);
     expect(payload.breakdown?.columns.map((column) => column.key)).toEqual([
       'name',
+      'screened',
       'alerts',
       'confirmed',
       'currentAdmitted',
@@ -822,6 +842,7 @@ describe('OperationalService.hfTab', () => {
     expect(payload.breakdown?.rows[0]).toMatchObject({
       name: 'Suba Sub County Hospital',
       filterValue: 'Suba Sub County Hospital',
+      screened: 9,
       alerts: 0,
       confirmed: 0,
       currentAdmitted: 0,
@@ -829,8 +850,11 @@ describe('OperationalService.hfTab', () => {
       deaths: 0,
     });
     expect(payload.charts[0].key).toBe('byFacility');
-    expect(payload.charts[0].title).toBe('Alerts and confirmed by facility');
+    expect(payload.charts[0].title).toBe(
+      'Screenings, alerts and confirmed by facility',
+    );
     expect(payload.charts[0].series.map((series) => series.key)).toEqual([
+      'screened',
       'alerts',
       'confirmed',
     ]);
@@ -1511,25 +1535,78 @@ describe('OperationalService.summaryTab', () => {
     }
   });
 
-  it('carries current admitted as the one pending card, dashed not derived', async () => {
+  it('fixes current admitted at zero with a detail saying so, and still does not derive it', async () => {
     const { payload } = await runSummaryTab();
-    const pendingCards = payload.cards.filter(
-      (card) => card.provenance.source === 'pending',
-    );
 
-    expect(pendingCards.map((card) => card.key)).toEqual(['currentAdmitted']);
-    for (const card of pendingCards) {
-      expect(card.value).toBeNull();
-      expect(card.detail).toBeNull();
-      expect(card.meta?.dataQualityStatus).toBe('unavailable');
-    }
+    expect(
+      payload.cards.filter((card) => card.provenance.source === 'pending'),
+    ).toEqual([]);
 
     const admitted = payload.cards.find(
       (card) => card.key === 'currentAdmitted',
     );
+
     expect(admitted?.label).toBe('Current admitted');
-    expect(admitted?.value).toBeNull();
-    expect(admitted?.provenance.label).toContain('admission measure');
+    expect(admitted?.value).toBe(0);
+    expect(admitted?.detail).toBe(
+      'Confirmed or probable cases currently admitted',
+    );
+    expect(admitted?.meta?.dataQualityStatus).not.toBe('unavailable');
+
+    const { payload: derived } = await runSummaryTab(
+      {},
+      { outcomes: { on_treatment: 9 } },
+    );
+    expect(
+      derived.cards.find((card) => card.key === 'currentAdmitted')?.value,
+    ).toBe(0);
+  });
+
+  it('hangs the case fatality rate under the deaths count, as deaths over confirmed to one decimal', async () => {
+    const { payload } = await runSummaryTab(
+      {},
+      {
+        cases: { confirmed_cases: 37 },
+        outcomes: { deaths: 4 },
+      },
+    );
+
+    const deaths = payload.cards.find((card) => card.key === 'deaths');
+    const confirmed = payload.cards.find(
+      (card) => card.key === 'confirmedCases',
+    );
+
+    expect(deaths?.value).toBe(4);
+    expect(confirmed?.value).toBe(37);
+    expect(deaths?.breakdown).toEqual([
+      {
+        key: 'caseFatalityRate',
+        label: 'Case fatality rate',
+        value: 10.8,
+        unit: 'percent',
+      },
+    ]);
+
+    expect(
+      payload.cards.map((card) => card.key).includes('caseFatalityRate'),
+    ).toBe(false);
+
+    expect(deaths?.detail).toBeNull();
+    expect(deaths?.provenance.source).toBe('live');
+  });
+
+  it('dashes the case fatality rate where no confirmed case falls in the window', async () => {
+    const { payload } = await runSummaryTab({}, { outcomes: { deaths: 4 } });
+
+    const deaths = payload.cards.find((card) => card.key === 'deaths');
+    const confirmed = payload.cards.find(
+      (card) => card.key === 'confirmedCases',
+    );
+
+    expect(confirmed?.value).toBe(0);
+    expect(deaths?.value).toBe(4);
+    expect(deaths?.provenance.source).toBe('live');
+    expect(deaths?.breakdown?.[0].value).toBeNull();
   });
 
   it('ships no empty-frame panel on the summary tab', async () => {
@@ -1732,13 +1809,9 @@ describe('OperationalService.summaryTab', () => {
       cases: { last_updated: STALE_INGEST },
     });
 
-    const admitted = payload.cards.find((card) => card.key === 'currentAdmitted');
-    expect(admitted?.value).toBeNull();
-    expect(admitted?.provenance.source).toBe('pending');
-
-    for (const card of payload.cards.filter((c) => c.key !== 'currentAdmitted')) {
-      expect(card.meta?.dataQualityStatus).not.toBe('stale');
-      expect(card.value).not.toBeNull();
+    for (const card of payload.cards) {
+      expect(card.meta?.dataQualityStatus, card.key).not.toBe('stale');
+      expect(card.value, card.key).not.toBeNull();
     }
   });
 

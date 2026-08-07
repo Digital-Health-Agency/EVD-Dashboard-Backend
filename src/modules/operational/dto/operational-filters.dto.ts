@@ -1,6 +1,13 @@
 import { z } from 'zod';
 
-export const periodValues = ['24h', '7d', '21d', '42d', 'custom'] as const;
+export const periodValues = [
+  '24h',
+  '7d',
+  '21d',
+  '42d',
+  'all',
+  'custom',
+] as const;
 
 export const periodSchema = z.enum(periodValues);
 

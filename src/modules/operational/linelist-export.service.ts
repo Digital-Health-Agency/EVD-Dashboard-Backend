@@ -95,11 +95,15 @@ export class LinelistExportService {
       boundsParams: ['86518-8'],
       boundsSql: `
         SELECT
-          to_char(max(coalesce(
+          to_char(coalesce(max(coalesce(
             result_datetime,
             reporting_result_date::timestamptz,
             collection_date::timestamptz
-          )) - $2::interval, 'YYYY-MM-DD') AS "from",
+          )) - $2::interval, min(coalesce(
+            result_datetime,
+            reporting_result_date::timestamptz,
+            collection_date::timestamptz
+          ))), 'YYYY-MM-DD') AS "from",
           to_char(max(coalesce(
             result_datetime,
             reporting_result_date::timestamptz,
@@ -152,7 +156,7 @@ export class LinelistExportService {
       boundsParams,
       boundsSql: `
         SELECT
-          to_char(max(coalesce(screening_datetime, reporting_date::timestamptz)) - $2::interval, 'YYYY-MM-DD') AS "from",
+          to_char(coalesce(max(coalesce(screening_datetime, reporting_date::timestamptz)) - $2::interval, min(coalesce(screening_datetime, reporting_date::timestamptz))), 'YYYY-MM-DD') AS "from",
           to_char(max(coalesce(screening_datetime, reporting_date::timestamptz)), 'YYYY-MM-DD') AS "to"
         FROM gold.report_screening
         WHERE ${boundsColumn} = $1`,
@@ -186,7 +190,7 @@ export class LinelistExportService {
       fallbackSort: 'reporting_date',
       boundsSql: `
         SELECT
-          to_char(max(coalesce(investigation_datetime, reporting_date::timestamptz)) - $1::interval, 'YYYY-MM-DD') AS "from",
+          to_char(coalesce(max(coalesce(investigation_datetime, reporting_date::timestamptz)) - $1::interval, min(coalesce(investigation_datetime, reporting_date::timestamptz))), 'YYYY-MM-DD') AS "from",
           to_char(max(coalesce(investigation_datetime, reporting_date::timestamptz)), 'YYYY-MM-DD') AS "to"
         FROM gold.report_case_investigation`,
       rowSql: `
@@ -219,11 +223,15 @@ export class LinelistExportService {
       fallbackSort: 'reporting_date',
       boundsSql: `
         SELECT
-          to_char(max(coalesce(
+          to_char(coalesce(max(coalesce(
             outcome_recorded_datetime,
             outcome_date::timestamptz,
             reporting_date::timestamptz
-          )) - $1::interval, 'YYYY-MM-DD') AS "from",
+          )) - $1::interval, min(coalesce(
+            outcome_recorded_datetime,
+            outcome_date::timestamptz,
+            reporting_date::timestamptz
+          ))), 'YYYY-MM-DD') AS "from",
           to_char(max(coalesce(
             outcome_recorded_datetime,
             outcome_date::timestamptz,
@@ -264,7 +272,7 @@ export class LinelistExportService {
       fallbackSort: 'registration_date',
       boundsSql: `
         SELECT
-          to_char(max(coalesce(registration_datetime, registration_date::timestamptz)) - $1::interval, 'YYYY-MM-DD') AS "from",
+          to_char(coalesce(max(coalesce(registration_datetime, registration_date::timestamptz)) - $1::interval, min(coalesce(registration_datetime, registration_date::timestamptz))), 'YYYY-MM-DD') AS "from",
           to_char(max(coalesce(registration_datetime, registration_date::timestamptz)), 'YYYY-MM-DD') AS "to"
         FROM gold.report_contact_registration`,
       rowSql: `
@@ -297,7 +305,7 @@ export class LinelistExportService {
       fallbackSort: 'created_date',
       boundsSql: `
         SELECT
-          to_char(max(created_date::timestamptz) - $1::interval, 'YYYY-MM-DD') AS "from",
+          to_char(coalesce(max(created_date::timestamptz) - $1::interval, min(created_date::timestamptz)), 'YYYY-MM-DD') AS "from",
           to_char(max(created_date::timestamptz), 'YYYY-MM-DD') AS "to"
         FROM gold.report_community_signals`,
       rowSql: `
@@ -409,7 +417,8 @@ export class LinelistExportService {
       };
     }
 
-    const interval = PERIOD_INTERVALS[query.period];
+    const interval =
+      query.period === 'all' ? null : PERIOD_INTERVALS[query.period];
     const result = await client.query<{ from: string | null; to: string | null }>(
       definition.boundsSql,
       [...(definition.boundsParams ?? []), interval],

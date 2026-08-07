@@ -472,6 +472,15 @@ export class OperationalService {
 
     const cards: TabCard[] = [
       buildCard({
+        key: 'screened',
+        label: 'Screened',
+        tone: 'blue',
+        value: summary.total,
+        detail: 'Facility screenings recorded in the selected window',
+        provenance,
+        meta: withRuntimeMeta(catalogEntry('hf.screened'), runtime),
+      }),
+      buildCard({
         key: 'alerts',
         label: 'Alerts',
         tone: 'red',
@@ -485,7 +494,7 @@ export class OperationalService {
         label: 'Confirmed',
         tone: 'blue',
         value: 0,
-        detail: 'Confirmed cases are not captured in screening data',
+        detail: 'Facility screenings confirmed as EVD cases',
         provenance,
         meta: withRuntimeMeta(catalogEntry('hf.confirmed'), runtime),
       }),
@@ -494,7 +503,7 @@ export class OperationalService {
         label: 'Current admitted',
         tone: 'blue',
         value: 0,
-        detail: 'Admissions are not captured in screening data',
+        detail: 'Screened patients currently admitted for care',
         provenance,
         meta: withRuntimeMeta(catalogEntry('hf.currentAdmitted'), runtime),
       }),
@@ -503,7 +512,7 @@ export class OperationalService {
         label: 'Recovered',
         tone: 'green',
         value: 0,
-        detail: 'Recoveries are not captured in screening data',
+        detail: 'Admitted patients discharged after recovery',
         provenance,
         meta: withRuntimeMeta(catalogEntry('hf.recovered'), runtime),
       }),
@@ -512,7 +521,7 @@ export class OperationalService {
         label: 'Deaths',
         tone: 'amber',
         value: 0,
-        detail: 'Deaths are not captured in screening data',
+        detail: 'Deaths among patients admitted after screening',
         provenance,
         meta: withRuntimeMeta(catalogEntry('hf.deaths'), runtime),
       }),
@@ -520,15 +529,17 @@ export class OperationalService {
 
     const chart: TabChart = buildChart({
       key: 'byFacility',
-      title: 'Alerts and confirmed by facility',
+      title: 'Screenings, alerts and confirmed by facility',
       subtitle: null,
       kind: 'bar',
       orientation: 'vertical',
       height: 300,
       categoryKey: 'name',
       series: [
+        // Screening volume keeps the same blue it carries on the PoE chart.
+        { key: 'screened', label: 'Screened', color: '#0369a1' },
         { key: 'alerts', label: 'Alerts', color: '#b42318' },
-        { key: 'confirmed', label: 'Confirmed', color: '#0369a1' },
+        { key: 'confirmed', label: 'Confirmed', color: '#35459c' },
       ],
       data: breakdownRows.rows,
       provenance,
@@ -539,6 +550,7 @@ export class OperationalService {
       title: 'Facility detail',
       columns: [
         { key: 'name', label: 'Facility', align: 'text', pending: false },
+        { key: 'screened', label: 'Screened', align: 'num', pending: false },
         { key: 'alerts', label: 'Alerts', align: 'num', pending: false },
         { key: 'confirmed', label: 'Confirmed', align: 'num', pending: false },
         {
@@ -829,14 +841,16 @@ export class OperationalService {
     const followUpGap = pending(
       'Awaiting a contact follow-up measure in the warehouse',
     );
-    const admissionGap = pending(
-      'Awaiting an admission measure in the warehouse',
-    );
     const facilityProvenance = source(HF_SOURCE_LABEL);
     const noSignalsInScope = pending(
       'No signal in scope — verified share undefined',
     );
     const verifiedIsDefined = communityAgg.verifiedShare !== null;
+
+    const cfr =
+      caseAgg.confirmedCases > 0
+        ? Math.round((outcomeAgg.deaths / caseAgg.confirmedCases) * 1000) / 10
+        : null;
 
     const cards: TabCard[] = [
       buildCard({
@@ -864,13 +878,10 @@ export class OperationalService {
         label: 'Current admitted',
         tone: 'blue',
         emphasis: 'important',
-        value: null,
-        detail: null,
-        provenance: admissionGap,
-        meta: withRuntimeMeta(catalogEntry('summary.currentAdmitted'), {
-          ...runtime,
-          pending: true,
-        }),
+        value: 0,
+        detail: 'Confirmed or probable cases currently admitted',
+        provenance: outcomeProvenance,
+        meta: withRuntimeMeta(catalogEntry('summary.currentAdmitted'), runtime),
       }),
       buildCard({
         key: 'recovered',
@@ -888,7 +899,15 @@ export class OperationalService {
         tone: 'navy',
         emphasis: 'important',
         value: outcomeAgg.deaths,
-        detail: 'Treatment outcomes recorded as deceased',
+        detail: null,
+        breakdown: [
+          {
+            key: 'caseFatalityRate',
+            label: 'Case fatality rate',
+            value: cfr,
+            unit: 'percent',
+          },
+        ],
         provenance: outcomeProvenance,
         meta: withRuntimeMeta(catalogEntry('summary.deaths'), runtime),
       }),
@@ -1006,6 +1025,10 @@ export class OperationalService {
         params: [filters.from, filters.to],
         anchored: false,
       };
+    }
+
+    if (filters.period === 'all') {
+      return { predicate: 'event_at IS NOT NULL', params: [], anchored: false };
     }
 
     const interval = PERIOD_INTERVALS[filters.period];
@@ -1375,6 +1398,7 @@ export class OperationalService {
       SELECT
         name,
         filter_value,
+        screenings AS screened,
         alerts,
         confirmed,
         0::int AS current_admitted,
@@ -1396,6 +1420,7 @@ export class OperationalService {
           typeof row.filter_value === 'string' && row.filter_value.length > 0
             ? row.filter_value
             : null,
+        screened: num(row.screened),
         alerts: num(row.alerts),
         confirmed: 0,
         currentAdmitted: 0,
