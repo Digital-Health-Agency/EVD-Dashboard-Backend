@@ -380,6 +380,12 @@ const POE_CHART_ROWS = [
   { name: 'Busia One Stop Border Post', alerts: 312 },
 ];
 
+const POE_DAILY_ROWS = [
+  { day: '2026-07-26', screened: 4210 },
+  { day: '2026-07-27', screened: 0 },
+  { day: '2026-07-28', screened: 3980 },
+];
+
 const POE_BREAKDOWN_ROWS = [
   {
     name: 'Jomo Kenyatta International Airport',
@@ -413,6 +419,8 @@ function fakePoeDb(
         rows = POE_CHART_ROWS;
       } else if (sql.includes('grouped_poe AS')) {
         rows = POE_BREAKDOWN_ROWS;
+      } else if (sql.includes('daily AS')) {
+        rows = POE_DAILY_ROWS;
       } else {
         throw new Error(`Unexpected SQL: ${sql}`);
       }
@@ -420,6 +428,12 @@ function fakePoeDb(
       return Promise.resolve({ rows: rows as T[], rowCount: rows.length });
     },
   };
+}
+
+function poeChart(payload: TabPayload, key: string) {
+  const chart = payload.charts.find((entry) => entry.key === key);
+  if (!chart) throw new Error(`No ${key} chart on the POE tab`);
+  return chart;
 }
 
 async function runPoeTab(
@@ -475,12 +489,32 @@ describe('OperationalService.poeTab', () => {
 
   it('charts screenings by point of entry, off the breakdown rows', async () => {
     const { payload } = await runPoeTab();
-    const chart = payload.charts[0];
+    const chart = poeChart(payload, 'byPointOfEntry');
 
-    expect(payload.charts).toHaveLength(1);
-    expect(chart.key).toBe('byPointOfEntry');
+    expect(payload.charts.map((entry) => entry.key)).toEqual([
+      'byPointOfEntry',
+      'dailyScreenings',
+    ]);
     expect(chart.series.map((series) => series.key)).toEqual(['screened']);
     expect(chart.data).toBe(payload.breakdown?.rows);
+  });
+
+  it('charts screenings per day, keeping the zero days in the window', async () => {
+    const { payload } = await runPoeTab();
+    const chart = poeChart(payload, 'dailyScreenings');
+
+    expect(chart.kind).toBe('bar');
+    expect(chart.orientation).toBe('horizontal');
+    expect(chart.categoryKey).toBe('day');
+    expect(chart.fullWidth).toBe(true);
+    expect(poeChart(payload, 'byPointOfEntry').fullWidth).toBeUndefined();
+    expect(chart.series.map((series) => series.key)).toEqual(['screened']);
+    expect(chart.data).toEqual([
+      { day: '2026-07-26', screened: 4210 },
+      { day: '2026-07-27', screened: 0 },
+      { day: '2026-07-28', screened: 3980 },
+    ]);
+    expect(chart.linelist).toBeUndefined();
   });
 
   it('offers the same one-key drill-down on the chart and the breakdown', async () => {
@@ -492,7 +526,7 @@ describe('OperationalService.poeTab', () => {
       noun: 'screenings',
     };
 
-    expect(payload.charts[0].linelist).toEqual(expected);
+    expect(poeChart(payload, 'byPointOfEntry').linelist).toEqual(expected);
     expect(payload.breakdown?.linelist).toEqual(expected);
 
     const sql = queries.find((text) => text.includes('grouped_poe AS')) ?? '';
@@ -609,10 +643,9 @@ describe('OperationalService.poeTab', () => {
 
     expect(payload.breakdown?.total).toBe(31);
     expect(payload.breakdown?.shown).toBe(2);
-    expect(payload.charts[0].key).toBe('byPointOfEntry');
-    expect(payload.charts[0].data.map((row) => row.screened)).toEqual([
-      90000, 35919,
-    ]);
+    expect(
+      poeChart(payload, 'byPointOfEntry').data.map((row) => row.screened),
+    ).toEqual([90000, 35919]);
   });
 
   it('renders measured numbers over an unrefreshed warehouse', async () => {

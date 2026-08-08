@@ -359,9 +359,10 @@ export class OperationalService {
   }
 
   async poeTab(filters: OperationalFiltersDto): Promise<TabPayload> {
-    const [summary, breakdownRows] = await Promise.all([
+    const [summary, breakdownRows, dailyRows] = await Promise.all([
       this.poeSummary(filters),
       this.poeBreakdown(filters),
+      this.poeDaily(filters),
     ]);
 
     const window: TabWindow = {
@@ -398,20 +399,36 @@ export class OperationalService {
       noun: 'screenings',
     };
 
-    const chart: TabChart = buildChart({
-      key: 'byPointOfEntry',
-      title: 'Screenings by point of entry',
-      subtitle: null,
-      kind: 'bar',
-      orientation: 'vertical',
-      height: 300,
-      categoryKey: 'name',
-      series: [{ key: 'screened', label: 'Screenings', color: '#0369a1' }],
-      data: breakdownRows.rows,
-      linelist: byPoeLinelist,
-      provenance,
-      meta: withRuntimeMeta(catalogEntry('poe.byPointOfEntry'), runtime),
-    });
+    const charts: TabChart[] = [
+      buildChart({
+        key: 'byPointOfEntry',
+        title: 'Screenings by point of entry',
+        subtitle: null,
+        kind: 'bar',
+        orientation: 'vertical',
+        height: 300,
+        categoryKey: 'name',
+        series: [{ key: 'screened', label: 'Screenings', color: '#0369a1' }],
+        data: breakdownRows.rows,
+        linelist: byPoeLinelist,
+        provenance,
+        meta: withRuntimeMeta(catalogEntry('poe.byPointOfEntry'), runtime),
+      }),
+      buildChart({
+        key: 'dailyScreenings',
+        title: 'Screenings by Day',
+        subtitle: null,
+        kind: 'bar',
+        orientation: 'horizontal',
+        height: 300,
+        categoryKey: 'day',
+        series: [{ key: 'screened', label: 'Screenings', color: '#0369a1' }],
+        data: dailyRows,
+        fullWidth: true,
+        provenance,
+        meta: withRuntimeMeta(catalogEntry('poe.dailyScreenings'), runtime),
+      }),
+    ];
 
     const breakdown: TabBreakdown = buildBreakdown({
       title: 'Screenings by point of entry',
@@ -446,7 +463,7 @@ export class OperationalService {
         },
       },
       cards,
-      charts: [chart],
+      charts,
       breakdown,
     };
   }
@@ -1259,6 +1276,45 @@ export class OperationalService {
       ...sectionBounds(row),
       anchored: scope.anchored,
     };
+  }
+
+  private async poeDaily(filters: OperationalFiltersDto) {
+    const scope = this.poeScope(filters);
+    const rows = await this.many(
+      `${scope.sql},
+      daily AS (
+        SELECT
+          date_trunc('day', event_at)::date AS day,
+          coalesce(sum(total_screening_count), 0)::int AS screened
+        FROM scoped
+        GROUP BY 1
+      ),
+      span AS (
+        SELECT min(day) AS start_day, max(day) AS end_day
+        FROM daily
+      ),
+      days AS (
+        -- Integer day offsets, so a custom range stays an absolute window.
+        SELECT (span.start_day + offset_days)::date AS day
+        FROM span
+        CROSS JOIN generate_series(0, span.end_day - span.start_day) AS offset_days
+        WHERE span.start_day IS NOT NULL
+          AND span.end_day IS NOT NULL
+      )
+      SELECT
+        to_char(days.day, 'YYYY-MM-DD') AS day,
+        coalesce(daily.screened, 0)::int AS screened
+      FROM days
+      LEFT JOIN daily ON daily.day = days.day
+      ORDER BY days.day ASC
+    `,
+      scope.params,
+    );
+
+    return rows.map((row) => ({
+      day: String(row.day),
+      screened: num(row.screened),
+    }));
   }
 
   private async poeBreakdown(filters: OperationalFiltersDto) {
