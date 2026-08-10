@@ -83,6 +83,7 @@ export interface TabChart {
   categoryKey: string;
   series: TabSeries[];
   data: Record<string, string | number | null>[];
+  fullWidth?: boolean;
   linelist?: TabLinelistRef;
   provenance: Provenance;
   meta?: IndicatorMeta;
