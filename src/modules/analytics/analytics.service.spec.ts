@@ -7,16 +7,28 @@ function rows<T>(data: T[]) {
   return Promise.resolve({ rows: data, rowCount: data.length });
 }
 
+const SURVEILLANCE_START = '2026-05-15';
+
+interface Call {
+  sql: string;
+  values?: unknown[];
+}
+
 describe('AnalyticsService', () => {
   it('maps backend gold analytics into the dashboard payload', async () => {
     const queries: string[] = [];
+    const calls: Call[] = [];
     const db: Queryable = {
       query: vi.fn((sql: string, values?: unknown[]) => {
         queries.push(sql);
+        calls.push({ sql, values });
 
-        if (sql.includes('FROM gold.report_lab_result')) {
+        if (
+          sql.includes('FROM gold.report_lab_result') &&
+          !sql.includes(') updates')
+        ) {
           expect(sql).toContain('test_code = $1');
-          expect(values).toEqual(['86518-8']);
+          expect(values).toEqual(['86518-8', SURVEILLANCE_START]);
         }
 
         if (sql.includes('max(updated_at)') && sql.includes(') updates')) {
@@ -191,5 +203,41 @@ describe('AnalyticsService', () => {
     expect(queries.join('\n')).not.toMatch(
       /report_(case_summary|case_trend|laboratory_summary|screening_summary|geographic_summary)/,
     );
+    
+    const aggregates = calls.filter((call) => !call.sql.includes(') updates'));
+    expect(aggregates.length).toBe(calls.length - 1);
+    for (const call of aggregates) {
+      const label = call.sql.slice(0, 80);
+      expect(call.sql, label).toMatch(/>= \$\d+::timestamptz/);
+      expect(call.values, label).toContain(SURVEILLANCE_START);
+    }
+
+    const freshness = calls.find((call) => call.sql.includes(') updates'));
+    expect(freshness).toBeDefined();
+    expect(freshness?.sql).not.toMatch(/>= \$\d+::timestamptz/);
+    expect(freshness?.values).toEqual(['86518-8']);
+  });
+
+  it('floors the 24-hour deltas by flooring the rows they are taken over', async () => {
+    const calls: Call[] = [];
+    const db: Queryable = {
+      query: vi.fn((sql: string, values?: unknown[]) => {
+        calls.push({ sql, values });
+        return rows([]);
+      }),
+    };
+
+    await new AnalyticsService(db).getMetrics();
+
+    const deltas = calls.filter((call) =>
+      call.sql.includes("interval '24 hours'"),
+    );
+    expect(deltas.length).toBeGreaterThan(0);
+    for (const call of deltas) {
+      expect(call.sql).toContain('max_event_at');
+      expect(call.sql).not.toContain('now()');
+      expect(call.sql).toMatch(/>= \$\d+::timestamptz/);
+      expect(call.values).toContain(SURVEILLANCE_START);
+    }
   });
 });

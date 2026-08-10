@@ -34,6 +34,7 @@ const DATASETS = [
 function exportHarness(
   fetchBatches: Array<Record<string, unknown>[]> = [[{ probe: 1 }], []],
   audit: { record: ReturnType<typeof vi.fn> } = { record: vi.fn() },
+  bounds: { from: string; to: string } = { from: '2026-07-07', to: '2026-07-28' },
 ) {
   const calls: Call[] = [];
   let fetchIndex = 0;
@@ -42,7 +43,7 @@ function exportHarness(
       calls.push({ sql, values });
       if (/SELECT\s+to_char\(/.test(sql)) {
         return {
-          rows: [{ from: '2026-07-07', to: '2026-07-28' }],
+          rows: [{ ...bounds }],
           rowCount: 1,
         };
       }
@@ -232,6 +233,48 @@ describe('LinelistExportService parity', () => {
     await collect(customResult.rows);
   });
 
+  it('reports a window that starts no earlier than the surveillance cut-off', async () => {
+    const preset = exportHarness(undefined, undefined, {
+      from: '2020-01-01',
+      to: '2026-07-28',
+    });
+    const presetResult = await preset.service.screenings(
+      linelistExportQuerySchema.parse({ period: 'all' }),
+    );
+    expect(presetResult.window).toEqual({
+      from: '2026-05-15',
+      to: '2026-07-28',
+    });
+    await collect(presetResult.rows);
+
+    const custom = exportHarness();
+    const customResult = await custom.service.screenings(
+      linelistExportQuerySchema.parse({
+        period: 'custom',
+        from: '2026-05-14',
+        to: '2026-07-28',
+      }),
+    );
+    expect(customResult.window).toEqual({
+      from: '2026-05-15',
+      to: '2026-07-28',
+    });
+    await collect(customResult.rows);
+  });
+
+  it('leaves a measured window that already starts after the cut-off alone', async () => {
+    const harness = exportHarness(undefined, undefined, {
+      from: '2026-05-16',
+      to: '2026-07-28',
+    });
+    const result = await harness.service.screenings(
+      linelistExportQuerySchema.parse({ period: 'all' }),
+    );
+
+    expect(result.window.from).toBe('2026-05-16');
+    await collect(result.rows);
+  });
+
   it('exports facility alerts from the same TaifaCare base scope', async () => {
     const { service, calls } = exportHarness();
     const result = await service.screenings(
@@ -255,6 +298,7 @@ describe('LinelistExportService parity', () => {
     expect(row.sql).toContain('(flagged_screening_count > 0)::text');
     expect(row.values).toEqual([
       'TAIFACARE_KENYAEMR',
+      '2026-05-15',
       'Suba Sub County Hospital',
       'true',
     ]);

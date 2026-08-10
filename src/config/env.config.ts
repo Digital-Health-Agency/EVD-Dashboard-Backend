@@ -1,5 +1,10 @@
 import { registerAs } from '@nestjs/config';
 
+import {
+  activeSurveillanceEvent,
+  type SurveillanceEvent,
+} from '../common/surveillance-event.js';
+
 export const DEFAULT_AUTH_DATABASE_URL =
   'postgres://postgres:postgres@localhost:5432/evd';
 export const DEFAULT_ANALYTICS_DATABASE_URL =
@@ -17,13 +22,20 @@ export function resolveAnalyticsDatabaseUrl(): string {
   return process.env.ANALYTICS_DATABASE_URL || DEFAULT_ANALYTICS_DATABASE_URL;
 }
 
+export function resolveSurveillanceEvent(): SurveillanceEvent {
+  return activeSurveillanceEvent();
+}
+
 export const envConfig = registerAs('env', () => {
   const authDatabaseUrl = resolveAuthDatabaseUrl();
   const analyticsDatabaseUrl = resolveAnalyticsDatabaseUrl();
+  const surveillanceEvent = resolveSurveillanceEvent();
 
   return {
     authDatabaseUrl,
     analyticsDatabaseUrl,
+    surveillanceEvent,
+    surveillanceStartDate: surveillanceEvent.startDate,
     databaseUrl: authDatabaseUrl,
     skipDbSchemaSync: process.env.SKIP_DB_SCHEMA_SYNC === 'true',
     port: parseInt(process.env.PORT || '4000', 10),

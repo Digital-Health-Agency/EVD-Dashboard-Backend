@@ -26,6 +26,8 @@ const SERVICE_SOURCE_PATH = resolve(
 
 const STALE_INGEST = '2026-07-28T13:28:11Z';
 
+const SURVEILLANCE_START = '2026-05-15';
+
 function summaryRow(lastUpdated: string) {
   return {
     tests_done: 436,
@@ -221,14 +223,24 @@ describe('OperationalService.labsTab', () => {
     expect(queries.join('\n')).not.toContain('now()');
     expect(payload.meta.window.anchored).toBe(true);
     expect(payload.meta.window.period).toBe('42d');
-    expect(values[0]).toEqual(['86518-8']);
+    expect(values[0]).toEqual(['86518-8', SURVEILLANCE_START]);
   });
 
-  it('applies no window at all for the all-time period', async () => {
+  it('floors an anchored period at the surveillance start without moving the anchor', async () => {
+    const { queries, values } = await runLabsTab({ period: '42d' });
+
+    expect(queries.join('\n')).toContain(
+      "event_at > bounds.max_event_at - interval '42 days' AND event_at >= $2::timestamptz",
+    );
+    expect(values[0]?.[1]).toBe(SURVEILLANCE_START);
+  });
+
+  it('bounds the all-time period at the surveillance start', async () => {
     const { payload, queries, values } = await runLabsTab({ period: 'all' });
     const sql = queries.join('\n');
 
-    expect(sql).toContain('event_at IS NOT NULL');
+    expect(sql).not.toContain('event_at IS NOT NULL');
+    expect(sql).toContain('event_at >= $2::timestamptz');
     expect(sql).not.toContain('interval');
     expect(sql).not.toContain('undefined');
     expect(sql).not.toContain('now()');
@@ -236,7 +248,7 @@ describe('OperationalService.labsTab', () => {
     expect(payload.meta.window.anchored).toBe(false);
     expect(payload.meta.window.period).toBe('all');
 
-    expect(values[0]).toEqual(['86518-8']);
+    expect(values[0]).toEqual(['86518-8', SURVEILLANCE_START]);
   });
 
   it('applies a custom range as two bound timestamps rather than an anchored interval', async () => {
@@ -276,12 +288,13 @@ describe('OperationalService.labsTab', () => {
     });
     const sql = supplied.queries.join('\n');
 
-    expect(sql).toContain('result_category = $2');
-    expect(sql).toContain('specimen_type = $3');
-    expect(sql).toContain('test_name = $4');
-    expect(sql).toContain('turnaround_time_band = $5');
+    expect(sql).toContain('result_category = $3');
+    expect(sql).toContain('specimen_type = $4');
+    expect(sql).toContain('test_name = $5');
+    expect(sql).toContain('turnaround_time_band = $6');
     expect(supplied.values[0]).toEqual([
       '86518-8',
+      SURVEILLANCE_START,
       'POSITIVE',
       'BLOOD',
       'Ebola PCR',
@@ -299,11 +312,12 @@ describe('OperationalService.labsTab', () => {
     const sql = queries.join('\n');
 
     expect(sql).toContain(
-      'lower(btrim(testing_laboratory_name)) = lower(btrim($2))',
+      'lower(btrim(testing_laboratory_name)) = lower(btrim($3))',
     );
     expect(sql).not.toContain('National Virology Reference Laboratory');
     expect(values[0]).toEqual([
       '86518-8',
+      SURVEILLANCE_START,
       'National Virology Reference Laboratory (NVRL)',
     ]);
     expect(payload.meta.filters.lab).toBe(
@@ -317,7 +331,7 @@ describe('OperationalService.labsTab', () => {
     expect(queries).toHaveLength(2);
     for (const sql of queries) {
       expect(sql).toContain(
-        'lower(btrim(testing_laboratory_name)) = lower(btrim($2))',
+        'lower(btrim(testing_laboratory_name)) = lower(btrim($3))',
       );
     }
   });
@@ -547,10 +561,14 @@ describe('OperationalService.poeTab', () => {
     const sql = queries.join('\n');
 
     expect(sql).toContain(
-      'lower(btrim(reporting_point_of_entry)) = lower(btrim($2))',
+      'lower(btrim(reporting_point_of_entry)) = lower(btrim($3))',
     );
     expect(sql).not.toContain('Busia One Stop Border Post');
-    expect(values[0]).toEqual(['TRAVELLER', 'Busia One Stop Border Post']);
+    expect(values[0]).toEqual([
+      'TRAVELLER',
+      SURVEILLANCE_START,
+      'Busia One Stop Border Post',
+    ]);
     expect(payload.meta.filters.poe).toBe('Busia One Stop Border Post');
   });
 
@@ -569,11 +587,16 @@ describe('OperationalService.poeTab', () => {
     });
     const sql = supplied.queries.join('\n');
 
-    expect(sql).toContain('lower(btrim(screening_outcome)) = lower(btrim($2))');
+    expect(sql).toContain('lower(btrim(screening_outcome)) = lower(btrim($3))');
     expect(sql).toContain(
-      'lower(btrim(reporting_screening_category)) = lower(btrim($3))',
+      'lower(btrim(reporting_screening_category)) = lower(btrim($4))',
     );
-    expect(supplied.values[0]).toEqual(['TRAVELLER', 'FLAGGED', 'SUSPECTED']);
+    expect(supplied.values[0]).toEqual([
+      'TRAVELLER',
+      SURVEILLANCE_START,
+      'FLAGGED',
+      'SUSPECTED',
+    ]);
   });
 
   it('writes no source-system predicate — a single-valued column is a no-op control', async () => {
@@ -635,7 +658,7 @@ describe('OperationalService.poeTab', () => {
       expect(sql).not.toContain("'TRAVELLER'");
       expect(sql).not.toContain('FACILITY');
     }
-    expect(values[0]).toEqual(['TRAVELLER']);
+    expect(values[0]).toEqual(['TRAVELLER', SURVEILLANCE_START]);
   });
 
   it('carries the real group count alongside the capped row count', async () => {
@@ -833,10 +856,14 @@ describe('OperationalService.hfTab', () => {
     for (const sql of queries) {
       expect(sql).toContain('reporting_facility_name');
       expect(sql).toContain('facility_name');
-      expect(sql).toContain('lower(btrim($2))');
+      expect(sql).toContain('lower(btrim($3))');
       expect(sql).not.toContain(facility);
     }
-    expect(values[0]).toEqual(['TAIFACARE_KENYAEMR', facility]);
+    expect(values[0]).toEqual([
+      'TAIFACARE_KENYAEMR',
+      SURVEILLANCE_START,
+      facility,
+    ]);
     expect(payload.meta.filters.facility).toBe(facility);
   });
 
@@ -1049,10 +1076,10 @@ describe('OperationalService.contactsTab', () => {
     const sql = queries.join('\n');
 
     expect(sql).toContain(
-      'lower(btrim(final_classification)) = lower(btrim($1))',
+      'lower(btrim(final_classification)) = lower(btrim($2))',
     );
     expect(sql).not.toContain("'SUSPECTED'");
-    expect(values[0]).toEqual(['SUSPECTED']);
+    expect(values[0]).toEqual([SURVEILLANCE_START, 'SUSPECTED']);
   });
 
   it('anchors on the registration columns of a table that has no reporting date', async () => {
@@ -1249,18 +1276,18 @@ describe('OperationalService.communityTab', () => {
     });
     const sql = supplied.queries.join('\n');
 
-    expect(sql).toContain('lower(btrim(source_system)) = lower(btrim($1))');
+    expect(sql).toContain('lower(btrim(source_system)) = lower(btrim($2))');
     expect(sql).not.toContain('signal_status');
     expect(sql).not.toContain('signal_type');
     expect(sql).not.toContain("'MDHARURA'");
-    expect(supplied.values[0]).toEqual(['MDHARURA']);
+    expect(supplied.values[0]).toEqual([SURVEILLANCE_START, 'MDHARURA']);
   });
 
   it('writes the community-source predicate whether or not its control renders', async () => {
     const { queries } = await runCommunityTab({ communitySource: 'ECHIS' });
 
     for (const sql of queries) {
-      expect(sql).toContain('lower(btrim(source_system)) = lower(btrim($1))');
+      expect(sql).toContain('lower(btrim(source_system)) = lower(btrim($2))');
     }
   });
 
@@ -1820,6 +1847,26 @@ describe('OperationalService.summaryTab', () => {
     expect(flow?.match(/event_at <= \$3::timestamptz/g)).toHaveLength(2);
   });
 
+  it('floors both marts of a two-window statement against one bound value', async () => {
+    for (const period of ['42d', 'all'] as const) {
+      const { queries, values } = await runSummaryTab({ period });
+
+      const flowIndex = queries.findIndex((sql) =>
+        sql.includes('community_daily AS'),
+      );
+      expect(flowIndex, period).toBeGreaterThan(-1);
+
+      const flow = queries[flowIndex];
+      expect(flow.match(/\$2::timestamptz/g), period).toHaveLength(2);
+      expect(values[flowIndex], period).toEqual(['86518-8', SURVEILLANCE_START]);
+
+      const facilities = queries.find((sql) =>
+        sql.includes('active_facilities AS'),
+      );
+      expect(facilities?.match(/\$1::timestamptz/g), period).toHaveLength(2);
+    }
+  });
+
   it('reports the widest window and the oldest ingestion across the six marts', async () => {
     const older = '2026-07-20T10:00:00Z';
     const { payload } = await runSummaryTab(
@@ -2204,6 +2251,29 @@ describe('buildCard', () => {
 
     expect(card.value).toBe(75);
     expect(card.breakdown?.map((entry) => entry.value)).toEqual([72, 3]);
+  });
+});
+
+describe('the surveillance event on every tab', () => {
+  it('is served with each payload, so the dashboard needs no copy of the date', async () => {
+    const runners = [
+      ['summary', runSummaryTab],
+      ['labs', runLabsTab],
+      ['poe', runPoeTab],
+      ['hf', runHfTab],
+      ['contacts', runContactsTab],
+      ['community', runCommunityTab],
+    ] as const;
+
+    for (const [tab, run] of runners) {
+      const { payload } = await run();
+
+      expect(payload.meta.surveillanceEvent, tab).toEqual({
+        key: 'evd',
+        label: 'Ebola Virus Disease',
+        startDate: SURVEILLANCE_START,
+      });
+    }
   });
 });
 
