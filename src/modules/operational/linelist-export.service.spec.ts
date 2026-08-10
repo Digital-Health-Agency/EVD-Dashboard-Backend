@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { Logger } from '@nestjs/common';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { Queryable } from '../../database/database.module.js';
 import {
@@ -8,6 +9,7 @@ import {
   LAB_RESULT_COLUMNS,
   SCREENING_COLUMNS,
   TREATMENT_OUTCOME_COLUMNS,
+  piiColumns,
   type DatasetRegistry,
 } from './column-registry.js';
 import { linelistExportQuerySchema } from './dto/linelist-export-query.dto.js';
@@ -29,7 +31,10 @@ const DATASETS = [
   ['signals', COMMUNITY_SIGNAL_COLUMNS, 'gold.report_community_signals', 'created_date::timestamptz'],
 ] as const;
 
-function exportHarness(fetchBatches: Array<Record<string, unknown>[]> = [[{ probe: 1 }], []]) {
+function exportHarness(
+  fetchBatches: Array<Record<string, unknown>[]> = [[{ probe: 1 }], []],
+  audit: { record: ReturnType<typeof vi.fn> } = { record: vi.fn() },
+) {
   const calls: Call[] = [];
   let fetchIndex = 0;
   const client = {
@@ -57,9 +62,11 @@ function exportHarness(fetchBatches: Array<Record<string, unknown>[]> = [[{ prob
   return {
     service: new LinelistExportService(
       db as unknown as ConstructorParameters<typeof LinelistExportService>[0],
+      audit as unknown as ConstructorParameters<typeof LinelistExportService>[1],
     ),
     calls,
     client,
+    audit,
   };
 }
 
@@ -73,7 +80,15 @@ function readHarness() {
         : { rows: [], rowCount: 0 };
     }),
   } as unknown as Queryable;
-  return { service: new LinelistService(db), calls };
+  return {
+    service: new LinelistService(
+      db,
+      { record: vi.fn() } as unknown as ConstructorParameters<
+        typeof LinelistService
+      >[1],
+    ),
+    calls,
+  };
 }
 
 function exportSql(calls: Call[]): Call {
@@ -150,6 +165,43 @@ describe('LinelistExportService parity', () => {
           .map((column) => column.column),
       );
       await collect(result.rows);
+    },
+  );
+
+  it.each(DATASETS)(
+    '%s names no identifying column anywhere in the export statement for a denied caller',
+    async (method, registry: DatasetRegistry) => {
+      const { service, calls } = exportHarness();
+      const result = await service[method](
+        linelistExportQuerySchema.parse({ q: 'wanjiku' }),
+        PII_DENIED,
+      );
+      await collect(result.rows);
+
+      const sql = exportSql(calls).sql;
+      expect(sql).not.toContain('wanjiku');
+      for (const column of piiColumns(registry)) {
+        expect(sql, `${method} ${column}`).not.toContain(column);
+      }
+    },
+  );
+
+  it.each(DATASETS)(
+    '%s scans the identifying columns in the export statement for an authorised caller',
+    async (method, registry: DatasetRegistry) => {
+      const { service, calls } = exportHarness();
+      const result = await service[method](
+        linelistExportQuerySchema.parse({ q: 'wanjiku' }),
+        { userId: 'u-1', role: 'surveillance', allowPii: true },
+      );
+      await collect(result.rows);
+
+      const sql = exportSql(calls).sql;
+      for (const column of piiColumns(registry)) {
+        expect(sql, `${method} ${column}`).toMatch(
+          new RegExp(`\\b${column} ILIKE \\$\\d+`),
+        );
+      }
     },
   );
 
@@ -245,4 +297,171 @@ describe('LinelistExportService parity', () => {
       await collect(result.rows);
     }
   });
+});
+
+describe('LinelistExportService served pii columns', () => {
+  const AUTHORISED = {
+    userId: 'u-1',
+    role: 'surveillance',
+    allowPii: true,
+  } as const;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function silenceLogger() {
+    return vi
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+  }
+
+  it.each(DATASETS)(
+    '%s reports the intersection of the served projection with the registry pii set',
+    async (method, registry: DatasetRegistry) => {
+      silenceLogger();
+      const expected = piiColumns(registry);
+      const { service } = exportHarness();
+      const result = await service[method](
+        linelistExportQuerySchema.parse({ fields: expected.join(',') }),
+        AUTHORISED,
+      );
+      await collect(result.rows);
+
+      expect(result.piiColumns).toEqual(expected);
+      expect(result.piiColumns.every((name) =>
+        result.columns.some((column) => column.name === name),
+      )).toBe(true);
+    },
+  );
+
+  it('reports both identifiers when a screening export selects two of them', async () => {
+    silenceLogger();
+    const { service } = exportHarness();
+    const result = await service.screenings(
+      linelistExportQuerySchema.parse({
+        fields: 'person_name,person_identifier',
+      }),
+      AUTHORISED,
+    );
+    await collect(result.rows);
+
+    expect(result.piiColumns).toHaveLength(2);
+  });
+
+  it.each(DATASETS)(
+    '%s reports no pii columns for a denied caller',
+    async (method, registry: DatasetRegistry) => {
+      silenceLogger();
+      const { service } = exportHarness();
+      const result = await service[method](
+        linelistExportQuerySchema.parse({
+          fields: piiColumns(registry).join(','),
+        }),
+        PII_DENIED,
+      );
+      await collect(result.rows);
+
+      expect(result.piiColumns).toEqual([]);
+    },
+  );
+
+  it('reports no pii columns when the default projection is served', async () => {
+    const { service } = exportHarness();
+    const result = await service.screenings(
+      linelistExportQuerySchema.parse({}),
+      AUTHORISED,
+    );
+    await collect(result.rows);
+
+    expect(result.piiColumns).toEqual([]);
+  });
+
+  it('issues no count query — the statement sequence is unchanged', async () => {
+    const { service, calls } = exportHarness([[{ id: 1 }, { id: 2 }], []]);
+    const result = await service.screenings(
+      linelistExportQuerySchema.parse({ period: '21d' }),
+    );
+    await collect(result.rows);
+
+    const kindOf = (sql: string) => {
+      if (/^BEGIN TRANSACTION/.test(sql.trim())) return 'begin';
+      if (/SELECT\s+to_char\(/.test(sql)) return 'bounds';
+      if (/^DECLARE linelist_export/.test(sql.trim())) return 'declare';
+      if (/^FETCH FORWARD/.test(sql.trim())) return 'fetch';
+      if (sql.trim() === 'COMMIT') return 'commit';
+      return `other:${sql.trim().slice(0, 40)}`;
+    };
+
+    expect(calls.map((call) => kindOf(call.sql))).toEqual([
+      'begin',
+      'bounds',
+      'declare',
+      'fetch',
+      'fetch',
+      'commit',
+    ]);
+    for (const call of calls) {
+      expect(call.sql).not.toMatch(/count\s*\(\s*\*\s*\)/i);
+    }
+  });
+});
+
+describe('LinelistExportService pii denial audit', () => {
+  const DENIED = { userId: 'u-9', role: 'user', allowPii: false } as const;
+  const AUTHORISED = {
+    userId: 'u-1',
+    role: 'surveillance',
+    allowPii: true,
+  } as const;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function silenceLogger() {
+    return vi
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+  }
+
+  it.each(DATASETS)(
+    '%s emits the same denial event on the export path as the paged path',
+    async (method, registry: DatasetRegistry) => {
+      silenceLogger();
+      const column = piiColumns(registry)[0];
+      const { service, audit } = exportHarness();
+      const result = await service[method](
+        linelistExportQuerySchema.parse({ fields: column }),
+        DENIED,
+      );
+      await collect(result.rows);
+
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      const event = audit.record.mock.calls[0][0] as Record<string, unknown>;
+      expect(event.eventType).toBe('pii_column_denied');
+      expect(event.actorId).toBe(DENIED.userId);
+      expect(event.actorRole).toBe(DENIED.role);
+      expect(event.columns).toEqual([column]);
+      expect(event.outcome).toBe('denied');
+      expect(event.rowCount).toBeNull();
+    },
+  );
+
+  it.each(DATASETS)(
+    '%s emits no denial event for an authorised caller',
+    async (method, registry: DatasetRegistry) => {
+      silenceLogger();
+      const { service, audit } = exportHarness();
+      const result = await service[method](
+        linelistExportQuerySchema.parse({
+          fields: piiColumns(registry).join(','),
+        }),
+        AUTHORISED,
+      );
+      await collect(result.rows);
+
+      expect(audit.record).not.toHaveBeenCalled();
+    },
+  );
 });

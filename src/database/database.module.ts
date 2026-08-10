@@ -199,6 +199,21 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         "updatedAt" timestamptz NOT NULL DEFAULT now()
       );
       CREATE INDEX IF NOT EXISTS sms_logs_message_idx ON sms_logs ("providerMessageId");
+
+      CREATE TABLE IF NOT EXISTS audit_events (
+        id text PRIMARY KEY,
+        "eventType" text NOT NULL,
+        "actorId" text,
+        "actorRole" text,
+        dataset text,
+        columns text[] NOT NULL DEFAULT '{}',
+        filters jsonb NOT NULL DEFAULT '{}',
+        "rowCount" integer,
+        outcome text NOT NULL DEFAULT 'ok',
+        "createdAt" timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS audit_events_actor_idx ON audit_events ("actorId", "createdAt" DESC);
+      CREATE INDEX IF NOT EXISTS audit_events_type_idx ON audit_events ("eventType", "createdAt" DESC);
     `);
   }
 }
