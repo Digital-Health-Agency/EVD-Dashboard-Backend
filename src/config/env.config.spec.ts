@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   DEFAULT_ANALYTICS_DATABASE_URL,
   DEFAULT_AUTH_DATABASE_URL,
+  envConfig,
   resolveAnalyticsDatabaseUrl,
   resolveAuthDatabaseUrl,
 } from './env.config.js';
@@ -12,6 +13,7 @@ describe('env.config', () => {
     'DATABASE_URL',
     'AUTH_DATABASE_URL',
     'ANALYTICS_DATABASE_URL',
+    'SURVEILLANCE_START_DATE',
   ] as const;
   let previousEnv: Record<(typeof trackedEnv)[number], string | undefined>;
 
@@ -98,6 +100,33 @@ describe('env.config', () => {
       process.env.AUTH_DATABASE_URL =
         'postgres://auth:pass@localhost:5432/auth_test';
       expect(resolveAuthDatabaseUrl()).toBe(process.env.AUTH_DATABASE_URL);
+    });
+  });
+
+  describe('the surveillance event', () => {
+    it('carries the outbreak start date into the config namespace', () => {
+      const config = envConfig();
+
+      expect(config.surveillanceStartDate).toBe('2026-05-15');
+      expect(config.surveillanceEvent).toEqual({
+        key: 'evd',
+        label: 'Ebola Virus Disease',
+        startDate: '2026-05-15',
+      });
+    });
+
+    it('takes a valid SURVEILLANCE_START_DATE override', () => {
+      process.env.SURVEILLANCE_START_DATE = '2027-01-31';
+
+      expect(envConfig().surveillanceStartDate).toBe('2027-01-31');
+    });
+
+    it('fails at boot on an unusable SURVEILLANCE_START_DATE', () => {
+      process.env.SURVEILLANCE_START_DATE = '2026-02-30';
+
+      expect(() => envConfig()).toThrow(
+        /SURVEILLANCE_START_DATE must be an ISO calendar date/,
+      );
     });
   });
 });

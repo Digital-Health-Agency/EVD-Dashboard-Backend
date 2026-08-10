@@ -19,6 +19,8 @@ import { LinelistService } from './linelist.service.js';
 
 const TOTAL_FROM_COUNT_QUERY = 4242;
 
+const SURVEILLANCE_START = '2026-05-15';
+
 interface Call {
   sql: string;
   values?: unknown[];
@@ -450,8 +452,8 @@ describe('LinelistService paging', () => {
     const page = await service.signals(parse({ page: '3', limit: '25' }));
 
     const row = rowStatement(calls);
-    expect(row.sql).toContain('LIMIT $1 OFFSET $2');
-    expect(row.values).toEqual([25, 50]);
+    expect(row.sql).toContain('LIMIT $2 OFFSET $3');
+    expect(row.values).toEqual([SURVEILLANCE_START, 25, 50]);
     expect(page.page).toBe(3);
     expect(page.limit).toBe(25);
   });
@@ -465,7 +467,7 @@ describe('LinelistService paging', () => {
     const count = countStatement(calls);
     expect(count.sql).not.toContain('LIMIT');
     expect(count.sql).not.toContain('OFFSET');
-    expect(count.values).toEqual([]);
+    expect(count.values).toEqual([SURVEILLANCE_START]);
   });
 
   it('lets pageSize override limit', async () => {
@@ -475,7 +477,7 @@ describe('LinelistService paging', () => {
     );
 
     expect(page.limit).toBe(10);
-    expect(rowStatement(calls).values).toEqual([10, 10]);
+    expect(rowStatement(calls).values).toEqual([SURVEILLANCE_START, 10, 10]);
   });
 });
 
@@ -530,14 +532,17 @@ describe('LinelistService search', () => {
     const row = rowStatement(calls);
     const searchable = searchableColumns(COMMUNITY_SIGNAL_COLUMNS);
     const disjunction = searchable
-      .map((column) => `${column} ILIKE $1`)
+      .map((column) => `${column} ILIKE $2`)
       .join(' OR ');
 
     expect(searchable).toEqual(['county', 'subcounty', 'community_unit']);
     expect(row.sql).toContain(`(${disjunction})`);
-    expect(row.values).toEqual(['%nairobi%', 50, 0]);
+    expect(row.values).toEqual([SURVEILLANCE_START, '%nairobi%', 50, 0]);
     expect(row.sql).not.toContain('nairobi');
-    expect(countStatement(calls).values).toEqual(['%nairobi%']);
+    expect(countStatement(calls).values).toEqual([
+      SURVEILLANCE_START,
+      '%nairobi%',
+    ]);
   });
 
   it('scans no identifying column for a caller the registry denies them to', async () => {
@@ -556,7 +561,7 @@ describe('LinelistService search', () => {
 
     const sql = rowStatement(calls).sql;
     for (const column of piiColumns(COMMUNITY_SIGNAL_COLUMNS)) {
-      expect(sql).toContain(`${column} ILIKE $1`);
+      expect(sql).toContain(`${column} ILIKE $2`);
     }
   });
 
@@ -572,7 +577,7 @@ describe('LinelistService search', () => {
     expect(placeholders).toHaveLength(
       searchableColumns(COMMUNITY_SIGNAL_COLUMNS).length,
     );
-    expect(new Set(placeholders)).toEqual(new Set(['1']));
+    expect(new Set(placeholders)).toEqual(new Set(['2']));
     expect(row.values?.filter((value) => value === '%anything%')).toHaveLength(1);
   });
 });
@@ -658,12 +663,29 @@ describe('LinelistService window resolution', () => {
     const row = rowStatement(calls);
     expect(row.sql).toContain('bounds AS (');
     expect(row.sql).toContain('max(event_at) AS max_event_at');
-    expect(row.sql).toContain("event_at > bounds.max_event_at - interval '7 days'");
+    expect(row.sql).toContain(
+      "event_at > bounds.max_event_at - interval '7 days' AND event_at >= $1::timestamptz",
+    );
     expect(row.sql).not.toContain('now()');
-    expect(row.values).toEqual([50, 0]);
+    expect(row.values).toEqual([SURVEILLANCE_START, 50, 0]);
   });
 
-  it('drops the window entirely for the all-time period', async () => {
+  it('never lets an anchored window start before the surveillance cut-off', async () => {
+    for (const period of ['24h', '7d', '21d', '42d'] as const) {
+      const { service, calls } = harness();
+      await service.signals(parse({ period }));
+
+      const row = rowStatement(calls);
+      expect(row.sql, period).toMatch(
+        /event_at > bounds\.max_event_at - interval '[^']+' AND event_at >= \$1::timestamptz/,
+      );
+      expect(row.values?.[0], period).toBe(SURVEILLANCE_START);
+      expect(row.sql, period).not.toContain('greatest(');
+      expect(row.sql, period).not.toContain('now()');
+    }
+  });
+
+  it('bounds the all-time period at the surveillance start rather than leaving it open', async () => {
     const { service, calls } = harness();
     await service.signals(parse({ period: 'all' }));
 
@@ -672,8 +694,9 @@ describe('LinelistService window resolution', () => {
     expect(row.sql).not.toContain('CROSS JOIN bounds');
     expect(row.sql).not.toContain('interval');
     expect(row.sql).not.toContain('undefined');
-    expect(row.sql).toContain('event_at IS NOT NULL');
-    expect(row.values).toEqual([50, 0]);
+    expect(row.sql).not.toContain('event_at IS NOT NULL');
+    expect(row.sql).toContain('event_at >= $1::timestamptz');
+    expect(row.values).toEqual([SURVEILLANCE_START, 50, 0]);
   });
 
   it('applies a custom range as two bound timestamps with no bounds sub-select', async () => {
@@ -694,6 +717,27 @@ describe('LinelistService window resolution', () => {
       0,
     ]);
   });
+
+  it('clamps a custom range that reaches back before the cut-off', async () => {
+    const { service, calls } = harness();
+    await service.signals(
+      parse({ period: 'custom', from: '2026-05-14', to: '2026-07-28' }),
+    );
+
+    const row = rowStatement(calls);
+    expect(row.values?.[0]).toBe('2026-05-15 00:00:00');
+    expect(row.values?.[1]).toBe('2026-07-28 23:59:59.999');
+    expect(row.values).not.toContain('2026-05-14 00:00:00');
+  });
+
+  it('leaves a custom range that already starts after the cut-off alone', async () => {
+    const { service, calls } = harness();
+    await service.signals(
+      parse({ period: 'custom', from: '2026-05-16', to: '2026-07-28' }),
+    );
+
+    expect(rowStatement(calls).values?.[0]).toBe('2026-05-16 00:00:00');
+  });
 });
 
 describe('LinelistService filters', () => {
@@ -705,9 +749,9 @@ describe('LinelistService filters', () => {
 
     const row = rowStatement(calls);
     expect(row.sql).not.toContain('signal_status');
-    expect(row.sql).toContain('lower(btrim(source_system)) = lower(btrim($1))');
+    expect(row.sql).toContain('lower(btrim(source_system)) = lower(btrim($2))');
     expect(row.sql).not.toContain('ECHIS');
-    expect(row.values).toEqual(['ECHIS', 50, 0]);
+    expect(row.values).toEqual([SURVEILLANCE_START, 'ECHIS', 50, 0]);
   });
 
   it('ignores a filter the dataset has no column for rather than raising', async () => {
@@ -719,7 +763,7 @@ describe('LinelistService filters', () => {
     const row = rowStatement(calls);
     expect(row.sql).not.toContain('specimen_type');
     expect(row.sql).not.toContain('reporting_point_of_entry');
-    expect(row.values).toEqual([50, 0]);
+    expect(row.values).toEqual([SURVEILLANCE_START, 50, 0]);
     expect(page.total).toBe(TOTAL_FROM_COUNT_QUERY);
   });
 
@@ -731,15 +775,23 @@ describe('LinelistService filters', () => {
 
     const row = rowStatement(calls);
     expect(row.sql).toContain(
-      'lower(btrim(testing_laboratory_name)) = lower(btrim($2))',
+      'lower(btrim(testing_laboratory_name)) = lower(btrim($3))',
     );
     expect(row.sql).toContain(
-      'lower(btrim(result_category)) = lower(btrim($3))',
+      'lower(btrim(result_category)) = lower(btrim($4))',
     );
     expect(row.sql).toContain(
-      'lower(btrim(turnaround_time_band)) = lower(btrim($4))',
+      'lower(btrim(turnaround_time_band)) = lower(btrim($5))',
     );
-    expect(row.values).toEqual(['86518-8', 'NVRL', 'POSITIVE', '0-1', 50, 0]);
+    expect(row.values).toEqual([
+      '86518-8',
+      SURVEILLANCE_START,
+      'NVRL',
+      'POSITIVE',
+      '0-1',
+      50,
+      0,
+    ]);
   });
 });
 
@@ -805,7 +857,9 @@ describe('LinelistService EVD scope', () => {
         expect(call.sql, method).not.toContain('test_code');
         expect(call.sql, method).not.toContain('surveillance_pathway');
       }
-      expect(countStatement(calls).values, method).toEqual([]);
+      expect(countStatement(calls).values, method).toEqual([
+        SURVEILLANCE_START,
+      ]);
     }
   });
 
@@ -820,7 +874,10 @@ describe('LinelistService EVD scope', () => {
       );
       expect(call.sql).not.toContain("'TRAVELLER'");
     }
-    expect(countStatement(calls).values).toEqual(['TRAVELLER']);
+    expect(countStatement(calls).values).toEqual([
+      'TRAVELLER',
+      SURVEILLANCE_START,
+    ]);
   });
 
   it('scopes facility alert drill-downs to TaifaCare before anchoring', async () => {
@@ -839,14 +896,15 @@ describe('LinelistService EVD scope', () => {
         call.sql.indexOf('bounds AS'),
       );
       expect(call.sql).toContain(
-        'lower(btrim(reporting_facility_name)) = lower(btrim($2))',
+        'lower(btrim(reporting_facility_name)) = lower(btrim($3))',
       );
       expect(call.sql).toContain(
-        'lower(btrim((flagged_screening_count > 0)::text)) = lower(btrim($3))',
+        'lower(btrim((flagged_screening_count > 0)::text)) = lower(btrim($4))',
       );
     }
     expect(countStatement(calls).values).toEqual([
       'TAIFACARE_KENYAEMR',
+      SURVEILLANCE_START,
       'Suba Sub County Hospital',
       'true',
     ]);
@@ -858,10 +916,10 @@ describe('LinelistService EVD scope', () => {
 
     for (const call of calls) {
       expect(call.sql).toContain(
-        'lower(btrim(signal_verified::text)) = lower(btrim($1))',
+        'lower(btrim(signal_verified::text)) = lower(btrim($2))',
       );
     }
-    expect(countStatement(calls).values).toEqual(['true']);
+    expect(countStatement(calls).values).toEqual([SURVEILLANCE_START, 'true']);
   });
 });
 

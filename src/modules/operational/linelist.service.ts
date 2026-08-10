@@ -6,6 +6,12 @@ import {
 } from '../../database/database.module.js';
 import { PERIOD_INTERVALS } from '../../common/analytics-helpers.js';
 import {
+  clampToSurveillanceStart,
+  anchoredWindowLowerBound,
+  resolveSurveillanceStartDate,
+  surveillanceFloorPredicate,
+} from '../../common/surveillance-event.js';
+import {
   CASE_INVESTIGATION_COLUMNS,
   COMMUNITY_SIGNAL_COLUMNS,
   CONTACT_REGISTRATION_COLUMNS,
@@ -685,15 +691,23 @@ export function buildLinelistScope(
     }
 
     if (query.period === 'all') {
-      clauses.push('event_at IS NOT NULL');
+      params.push(resolveSurveillanceStartDate());
+      clauses.push(surveillanceFloorPredicate('event_at', `$${params.length}`));
     } else if (anchored) {
       const interval = PERIOD_INTERVALS[query.period];
+      params.push(resolveSurveillanceStartDate());
       clauses.push(
-        `event_at > bounds.max_event_at - interval '${interval}'` +
-          ` AND event_at <= bounds.max_event_at`,
+        `${anchoredWindowLowerBound(
+          'event_at',
+          `bounds.max_event_at - interval '${interval}'`,
+          `$${params.length}`,
+        )}` + ` AND event_at <= bounds.max_event_at`,
       );
     } else {
-      params.push(query.from, query.to);
+      params.push(
+        query.from ? clampToSurveillanceStart(query.from) : query.from,
+        query.to,
+      );
       clauses.push(
         `event_at >= $${params.length - 1}::timestamptz` +
           ` AND event_at <= $${params.length}::timestamptz`,

@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 
 import { PERIOD_INTERVALS } from '../../common/analytics-helpers.js';
+import { clampToSurveillanceStart } from '../../common/surveillance-event.js';
 import {
   ANALYTICS_POSTGRES_POOL,
   type Queryable,
@@ -426,7 +427,7 @@ export class LinelistExportService {
         throw new Error('Custom export window requires both bounds');
       }
       return {
-        from: query.from.slice(0, 10),
+        from: clampToSurveillanceStart(query.from.slice(0, 10)),
         to: query.to.slice(0, 10),
       };
     }
@@ -444,7 +445,7 @@ export class LinelistExportService {
     if (!ISO_DATE.test(window.from) || !ISO_DATE.test(window.to)) {
       throw new Error(`Invalid export window for ${definition.dataset}`);
     }
-    return { from: window.from, to: window.to };
+    return { from: clampToSurveillanceStart(window.from), to: window.to };
   }
 
   private async *cursorRows(

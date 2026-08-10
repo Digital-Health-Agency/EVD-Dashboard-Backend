@@ -13,6 +13,7 @@ import {
   source,
   stringValue,
 } from '../../common/analytics-helpers.js';
+import { resolveSurveillanceStartDate } from '../../common/surveillance-event.js';
 
 interface NumberRow extends QueryResultRow {
   [key: string]: unknown;
@@ -20,6 +21,14 @@ interface NumberRow extends QueryResultRow {
 
 const GOLD_SOURCE = 'gold analytics warehouse';
 const EVD_LAB_TEST_CODE = '86518-8';
+const CASE_EVENT_AT = `coalesce(investigation_datetime, reporting_date::timestamptz)`;
+const OUTCOME_EVENT_AT = `coalesce(
+          outcome_recorded_datetime,
+          outcome_date::timestamptz,
+          reporting_date::timestamptz
+        )`;
+const SCREENING_EVENT_AT = `coalesce(screening_datetime, reporting_date::timestamptz)`;
+const CONTACT_EVENT_AT = `coalesce(registration_datetime, registration_date::timestamptz)`;
 
 @Injectable()
 export class AnalyticsService {
@@ -156,9 +165,14 @@ export class AnalyticsService {
         FROM gold.report_lab_result
         WHERE test_code = $1
       ),
+      scoped AS (
+        SELECT *
+        FROM base
+        WHERE event_at >= $2::timestamptz
+      ),
       bounds AS (
         SELECT max(event_at) AS max_event_at
-        FROM base
+        FROM scoped
       )
       SELECT
         coalesce(sum(total_test_count), 0)::int AS tests_done,
@@ -188,10 +202,10 @@ export class AnalyticsService {
           WHERE event_at > bounds.max_event_at - interval '24 hours'
             AND event_at <= bounds.max_event_at
         ), 0)::int AS tests_24h
-      FROM base
+      FROM scoped
       CROSS JOIN bounds
     `,
-      [EVD_LAB_TEST_CODE],
+      [EVD_LAB_TEST_CODE, resolveSurveillanceStartDate()],
     );
 
     const testsDone = num(row.tests_done);
@@ -229,6 +243,11 @@ export class AnalyticsService {
           negative_test_count
         FROM gold.report_lab_result
         WHERE test_code = $1
+          AND coalesce(
+            result_datetime,
+            reporting_result_date::timestamptz,
+            collection_date::timestamptz
+          ) >= $2::timestamptz
       )
       SELECT
         to_char(period_end, 'YYYY-MM-DD') AS date,
@@ -240,7 +259,7 @@ export class AnalyticsService {
       GROUP BY period_end
       ORDER BY period_end
     `,
-      [EVD_LAB_TEST_CODE],
+      [EVD_LAB_TEST_CODE, resolveSurveillanceStartDate()],
     );
 
     return rows.map((row) => ({
@@ -252,12 +271,14 @@ export class AnalyticsService {
   }
 
   private async caseSummary() {
-    const row = await this.one(`
+    const row = await this.one(
+      `
       WITH case_base AS (
         SELECT
           *,
-          coalesce(investigation_datetime, reporting_date::timestamptz) AS event_at
+          ${CASE_EVENT_AT} AS event_at
         FROM gold.report_case_investigation
+        WHERE ${CASE_EVENT_AT} >= $1::timestamptz
       ),
       case_bounds AS (
         SELECT max(event_at) AS max_event_at
@@ -266,12 +287,9 @@ export class AnalyticsService {
       outcome_base AS (
         SELECT
           *,
-          coalesce(
-            outcome_recorded_datetime,
-            outcome_date::timestamptz,
-            reporting_date::timestamptz
-          ) AS event_at
+          ${OUTCOME_EVENT_AT} AS event_at
         FROM gold.report_treatment_outcome
+        WHERE ${OUTCOME_EVENT_AT} >= $1::timestamptz
       ),
       outcome_bounds AS (
         SELECT max(event_at) AS max_event_at
@@ -316,11 +334,14 @@ export class AnalyticsService {
           CROSS JOIN outcome_bounds ob
         ) AS recoveries_24h,
         (SELECT coalesce(sum(total_contact_registration_count), 0)::int
-          FROM gold.report_contact_registration) AS contacts_listed,
+          FROM gold.report_contact_registration
+          WHERE ${CONTACT_EVENT_AT} >= $1::timestamptz) AS contacts_listed,
         to_char(max(cb.max_event_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS') AS case_24h_window_end
       FROM case_base c
       CROSS JOIN case_bounds cb
-    `);
+    `,
+      [resolveSurveillanceStartDate()],
+    );
 
     const totalCases = num(row.total_cases);
     return {
@@ -351,7 +372,8 @@ export class AnalyticsService {
   }
 
   private async caseTrend() {
-    const rows = await this.many(`
+    const rows = await this.many(
+      `
       WITH case_weekly AS (
         SELECT
           reporting_epi_year AS epi_year,
@@ -364,6 +386,7 @@ export class AnalyticsService {
         FROM gold.report_case_investigation
         WHERE reporting_epi_year IS NOT NULL
           AND reporting_epi_week IS NOT NULL
+          AND ${CASE_EVENT_AT} >= $1::timestamptz
         GROUP BY 1, 2
       ),
       outcome_weekly AS (
@@ -381,6 +404,7 @@ export class AnalyticsService {
         FROM gold.report_treatment_outcome
         WHERE reporting_epi_year IS NOT NULL
           AND reporting_epi_week IS NOT NULL
+          AND ${OUTCOME_EVENT_AT} >= $1::timestamptz
         GROUP BY 1, 2
       ),
       combined AS (
@@ -408,7 +432,9 @@ export class AnalyticsService {
       FROM combined
       GROUP BY epi_year, epi_week
       ORDER BY epi_year, epi_week
-    `);
+    `,
+      [resolveSurveillanceStartDate()],
+    );
 
     return rows.map((row) => ({
       date: dateString(row.date),
@@ -421,12 +447,14 @@ export class AnalyticsService {
   }
 
   private async poeSummary() {
-    const row = await this.one(`
+    const row = await this.one(
+      `
       WITH base AS (
         SELECT
           *,
-          coalesce(screening_datetime, reporting_date::timestamptz) AS event_at
+          ${SCREENING_EVENT_AT} AS event_at
         FROM gold.report_screening
+        WHERE ${SCREENING_EVENT_AT} >= $1::timestamptz
       ),
       bounds AS (
         SELECT max(event_at) AS max_event_at
@@ -451,7 +479,9 @@ export class AnalyticsService {
         to_char(max(reporting_date), 'YYYY-MM-DD') AS last_screening
       FROM base
       CROSS JOIN bounds
-    `);
+    `,
+      [resolveSurveillanceStartDate()],
+    );
 
     const totalScreened = num(row.total_screened);
     return {
@@ -474,13 +504,15 @@ export class AnalyticsService {
   }
 
   private async poeTrend() {
-    const rows = await this.many(`
+    const rows = await this.many(
+      `
       WITH screening_daily AS (
         SELECT
           coalesce(reporting_date, screening_datetime::date) AS day,
           total_screening_count,
           flagged_screening_count
         FROM gold.report_screening
+        WHERE ${SCREENING_EVENT_AT} >= $1::timestamptz
       )
       SELECT
         to_char(day, 'YYYY-MM-DD') AS date,
@@ -491,7 +523,9 @@ export class AnalyticsService {
       GROUP BY day
       ORDER BY day DESC
       LIMIT 14
-    `);
+    `,
+      [resolveSurveillanceStartDate()],
+    );
 
     return rows
       .map((row) => ({
@@ -503,7 +537,8 @@ export class AnalyticsService {
   }
 
   private async poeRows() {
-    const rows = await this.many(`
+    const rows = await this.many(
+      `
       SELECT
         coalesce(
           nullif(reporting_point_of_entry, ''),
@@ -517,10 +552,13 @@ export class AnalyticsService {
         0::int AS confirmed,
         0::int AS tested
       FROM gold.report_screening
+      WHERE ${SCREENING_EVENT_AT} >= $1::timestamptz
       GROUP BY 1
       ORDER BY screened DESC, alerts DESC, name ASC
       LIMIT 20
-    `);
+    `,
+      [resolveSurveillanceStartDate()],
+    );
 
     return rows.map((row) => ({
       name: String(row.name),
@@ -536,7 +574,8 @@ export class AnalyticsService {
   }
 
   private async geographyRows() {
-    const rows = await this.many(`
+    const rows = await this.many(
+      `
       WITH geographic_activity AS (
         SELECT
           coalesce(nullif(reporting_county, ''), 'Not recorded') AS county,
@@ -544,6 +583,7 @@ export class AnalyticsService {
           coalesce(sum(final_confirmed_count), 0)::int AS confirmed,
           0::int AS deaths
         FROM gold.report_case_investigation
+        WHERE ${CASE_EVENT_AT} >= $1::timestamptz
         GROUP BY 1
         UNION ALL
         SELECT
@@ -552,6 +592,7 @@ export class AnalyticsService {
           0,
           coalesce(sum(deceased_count), 0)::int AS deaths
         FROM gold.report_treatment_outcome
+        WHERE ${OUTCOME_EVENT_AT} >= $1::timestamptz
         GROUP BY 1
       )
       SELECT
@@ -567,7 +608,9 @@ export class AnalyticsService {
       GROUP BY 1
       ORDER BY total_cases DESC, screened DESC, lab_tests DESC, county ASC
       LIMIT 20
-    `);
+    `,
+      [resolveSurveillanceStartDate()],
+    );
 
     return rows.map((row) => ({
       county: String(row.county),
