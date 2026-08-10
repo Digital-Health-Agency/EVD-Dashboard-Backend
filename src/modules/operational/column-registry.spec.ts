@@ -228,6 +228,15 @@ describe('the registry covers exactly the six linelist datasets', () => {
     }
   });
 
+  it('classifies exactly ten specs as pii across the six registries', () => {
+    const perRegistry = datasetKeys.map(
+      (key) => piiColumns(registryFor(key)).length,
+    );
+
+    expect(perRegistry).toEqual([1, 2, 2, 2, 2, 1]);
+    expect(perRegistry.reduce((total, count) => total + count, 0)).toBe(10);
+  });
+
   it('keys every entry to its own SQL identifier, so no key aliases a column', () => {
     for (const key of datasetKeys) {
       const registry = registryFor(key);
@@ -283,11 +292,15 @@ describe.each(datasetKeys)('%s exposure contract', (key) => {
     }
   });
 
-  it('makes every pii column default and searchable', () => {
-    for (const spec of Object.values(registry)) {
-      if (spec.exposure !== 'pii') continue;
-      expect(spec.byDefault).toBe(true);
+  it('makes every pii column opt-in, still searchable, and still classified pii', () => {
+    const identifying = piiColumns(registry);
+    expect(identifying.length).toBeGreaterThan(0);
+
+    for (const column of identifying) {
+      const spec = registry[column];
+      expect(spec.byDefault).toBe(false);
       expect(spec.searchable).toBe(true);
+      expect(spec.exposure).toBe('pii');
     }
   });
 
@@ -300,6 +313,21 @@ describe.each(datasetKeys)('%s exposure contract', (key) => {
     expect(resolveFields(registry, [], { allowPii: true })).toEqual(
       defaultColumns(registry, { allowPii: true }),
     );
+  });
+
+  it('serves the same default set to an authorised caller as to a denied one', () => {
+    expect(resolveFields(registry, undefined, { allowPii: true })).toEqual(
+      resolveFields(registry, undefined, { allowPii: false }),
+    );
+    expect(resolveFields(registry, [], { allowPii: true })).toEqual(
+      resolveFields(registry, [], { allowPii: false }),
+    );
+
+    for (const column of piiColumns(registry)) {
+      expect(resolveFields(registry, undefined, { allowPii: true })).not.toContain(
+        column,
+      );
+    }
   });
 
   it('never includes a pii identifier in the default projection', () => {
@@ -383,15 +411,57 @@ describe.each(datasetKeys)('%s exposure contract', (key) => {
     expect(requestedPiiColumns(registry)).toEqual([]);
   });
 
-  it('scans every pii column with free-text search from the registry flags', () => {
+  it('withholds every pii column from free-text search unless access allows it', () => {
     const searchable = searchableColumns(registry);
     expect(searchable).toEqual(
+      Object.values(registry)
+        .filter((spec) => spec.searchable && spec.exposure !== 'pii')
+        .map((spec) => spec.column),
+    );
+    for (const column of piiColumns(registry)) {
+      expect(searchable).not.toContain(column);
+    }
+  });
+
+  it('treats an absent or negative access flag as denial of the searchable pii columns', () => {
+    const denied = [
+      searchableColumns(registry),
+      searchableColumns(registry, {}),
+      searchableColumns(registry, { allowPii: false }),
+    ];
+
+    for (const list of denied) {
+      expect(list).toEqual(denied[0]);
+      for (const column of piiColumns(registry)) {
+        expect(list).not.toContain(column);
+      }
+    }
+  });
+
+  it('scans every searchable pii column for a caller access allows it to', () => {
+    const allowed = searchableColumns(registry, { allowPii: true });
+
+    expect(allowed).toEqual(
       Object.values(registry)
         .filter((spec) => spec.searchable)
         .map((spec) => spec.column),
     );
     for (const column of piiColumns(registry)) {
-      expect(searchable).toContain(column);
+      expect(allowed).toContain(column);
+    }
+  });
+
+  it('offers every pii column to an authorised chooser and none to a denied one', () => {
+    const allowed = (
+      resolveAvailableColumnSpecs?.(registry, { allowPii: true }) ?? []
+    ).map((column) => column.name);
+    const denied = (
+      resolveAvailableColumnSpecs?.(registry, { allowPii: false }) ?? []
+    ).map((column) => column.name);
+
+    for (const column of piiColumns(registry)) {
+      expect(allowed).toContain(column);
+      expect(denied).not.toContain(column);
     }
   });
 

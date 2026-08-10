@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { describe, expect, it, vi } from 'vitest';
 
+import { NoStoreInterceptor } from '../../common/interceptors/no-store.interceptor.js';
 import { linelistQuerySchema } from './dto/linelist-query.dto.js';
 import {
   LinelistController,
@@ -9,6 +10,7 @@ import {
 import type { LinelistService } from './linelist.service.js';
 
 const PUBLIC_ROUTE_KEY = 'PUBLIC';
+const INTERCEPTORS_METADATA = '__interceptors__';
 
 const handlers = [
   'labResults',
@@ -20,7 +22,11 @@ const handlers = [
 ] as const;
 
 const forwardingCases = handlers.flatMap((handler) =>
-  ['admin', 'viewer'].map((role) => ({ handler, role })),
+  [
+    { role: 'admin,surveillance', allowPii: true },
+    { role: 'surveillance', allowPii: true },
+    { role: 'admin', allowPii: false },
+  ].map((grant) => ({ handler, ...grant })),
 );
 
 describe('LinelistController', () => {
@@ -41,7 +47,7 @@ describe('LinelistController', () => {
 
   it.each(forwardingCases)(
     '$handler forwards the validated query and a $role caller access to its service method',
-    async ({ handler, role }) => {
+    async ({ handler, role, allowPii }) => {
       const result = { data: [], total: 0, page: 1, limit: 50 };
       const method = vi.fn().mockResolvedValue(result);
       const controller = new LinelistController({
@@ -55,7 +61,7 @@ describe('LinelistController', () => {
       expect(method).toHaveBeenCalledWith(query, {
         userId: 'u-1',
         role,
-        allowPii: true,
+        allowPii,
       });
       expect(returned).toBe(result);
     },
@@ -68,32 +74,71 @@ describe('LinelistController', () => {
 
     expect(routes.sort()).toEqual([...handlers].sort());
   });
+
+  it('carries the no-store interceptor on the controller, covering every route', () => {
+    const declared = Reflect.getMetadata(
+      INTERCEPTORS_METADATA,
+      LinelistController,
+    );
+
+    expect(Array.isArray(declared)).toBe(true);
+    expect(declared).toContain(NoStoreInterceptor);
+  });
+
+  it.each(handlers)(
+    'does not re-declare the interceptor on %s',
+    (handler) => {
+      expect(
+        Reflect.getMetadata(
+          INTERCEPTORS_METADATA,
+          LinelistController.prototype[handler],
+        ),
+      ).toBeUndefined();
+    },
+  );
 });
 
 describe('linelist pii access policy', () => {
-  it('authorises any authenticated session, whatever the role', () => {
+  it('authorises only a session whose role resolves to surveillance', () => {
+    expect(
+      resolveLinelistAccess({ user: { id: 'a', role: 'surveillance' } }),
+    ).toEqual({ userId: 'a', role: 'surveillance', allowPii: true });
+
+    expect(
+      resolveLinelistAccess({ user: { id: 'a', role: 'admin,surveillance' } }),
+    ).toEqual({ userId: 'a', role: 'admin,surveillance', allowPii: true });
+  });
+
+  it('denies every role that does not resolve to surveillance', () => {
     expect(resolveLinelistAccess({ user: { id: 'a', role: 'admin' } })).toEqual(
-      { userId: 'a', role: 'admin', allowPii: true },
+      { userId: 'a', role: 'admin', allowPii: false },
     );
 
-    for (const role of ['user', 'viewer', 'analyst', 'ADMIN', '']) {
+    for (const role of [
+      'user',
+      'viewer',
+      'analyst',
+      'ADMIN',
+      '',
+      'surveillance-lead',
+    ]) {
       expect(
         resolveLinelistAccess({ user: { id: 'b', role } }).allowPii,
         role,
-      ).toBe(true);
+      ).toBe(false);
     }
   });
 
-  it('authorises an authenticated session with no declared role', () => {
+  it('denies an authenticated session with no declared role', () => {
     expect(resolveLinelistAccess({ user: { id: 'c' } })).toEqual({
       userId: 'c',
       role: null,
-      allowPii: true,
+      allowPii: false,
     });
     expect(resolveLinelistAccess({ user: { userId: 'd' } })).toEqual({
       userId: 'd',
       role: null,
-      allowPii: true,
+      allowPii: false,
     });
   });
 

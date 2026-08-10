@@ -14,6 +14,11 @@ import { Pool } from 'pg';
 import { DatabaseService } from '../../database/database.module.js';
 import { UserAccountService } from './user-account.service.js';
 import {
+  createUserSchema,
+  updateMeSchema,
+  updateUserSchema,
+} from './dto/user-account.dto.js';
+import {
   USER_INVITE_SENDER,
   type UserInviteSender,
 } from './user-invite.service.js';
@@ -197,10 +202,135 @@ describe('UserAccountService', () => {
     expect(await countRows('session')).toBe(0);
   });
 
+  it('persists a compound role byte-identically through create and read', async () => {
+    const created = await service.create({
+      name: 'Surveillance Admin',
+      email: 'compound@example.com',
+      password: 'password123',
+      role: 'admin,surveillance',
+    });
+
+    expect(created.role).toBe('admin,surveillance');
+
+    const reloaded = await service.findOne(String(created.id));
+    expect(reloaded.role).toBe('admin,surveillance');
+
+    const listed = await service.findAll();
+    expect(listed.data[0].role).toBe('admin,surveillance');
+  });
+
+  it('persists a compound role written through update and reads it back unchanged', async () => {
+    const created = await service.create({
+      name: 'Promoted User',
+      email: 'promoted@example.com',
+      password: 'password123',
+      role: 'user',
+    });
+
+    const updated = await service.update(String(created.id), {
+      role: 'admin,surveillance',
+    });
+    expect(updated.role).toBe('admin,surveillance');
+
+    const reloaded = await service.findOne(String(created.id));
+    expect(reloaded.role).toBe('admin,surveillance');
+  });
+
+  it('revokes the target sessions when an update changes the role', async () => {
+    const created = await service.create({
+      name: 'Granted User',
+      email: 'granted@example.com',
+      password: 'password123',
+      role: 'user',
+    });
+    await db.query(
+      'INSERT INTO session (id, "userId", token) VALUES ($1, $2, $3)',
+      ['session-grant', created.id, 'grant-token'],
+    );
+    expect(await countRows('session')).toBe(1);
+
+    await service.update(String(created.id), { role: 'admin,surveillance' });
+
+    expect(await countRows('session')).toBe(0);
+  });
+
+  it('leaves sessions intact for an update that does not change the role', async () => {
+    const created = await service.create({
+      name: 'Renamed User',
+      email: 'renamed@example.com',
+      password: 'password123',
+      role: 'surveillance',
+    });
+    await db.query(
+      'INSERT INTO session (id, "userId", token) VALUES ($1, $2, $3)',
+      ['session-keep', created.id, 'keep-token'],
+    );
+
+    await service.update(String(created.id), { name: 'Renamed Again' });
+    expect(await countRows('session')).toBe(1);
+
+    await service.update(String(created.id), { role: 'surveillance' });
+    expect(await countRows('session')).toBe(1);
+  });
+
   async function countRows(table: string): Promise<number> {
     const result = await db.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM ${table}`,
     );
     return Number(result.rows[0].count);
   }
+});
+
+describe('user account role schemas', () => {
+  it('accepts a compound role and canonicalises it', () => {
+    expect(
+      createUserSchema.parse({
+        name: 'x',
+        email: 'A@B.io',
+        role: 'admin,surveillance',
+      }).role,
+    ).toBe('admin,surveillance');
+
+    const reordered = createUserSchema.parse({
+      name: 'x',
+      email: 'A@B.io',
+      role: 'surveillance, admin',
+    }).role;
+    expect(reordered).toBe('admin,surveillance');
+    expect(reordered.includes(' ')).toBe(false);
+  });
+
+  it('defaults to user when no role is supplied', () => {
+    expect(createUserSchema.parse({ name: 'x', email: 'A@B.io' }).role).toBe(
+      'user',
+    );
+  });
+
+  it('rejects any string carrying a token outside AUTH_ROLES', () => {
+    for (const role of ['root', 'admin,root', '', 'surveillance-lead']) {
+      expect(() =>
+        createUserSchema.parse({ name: 'x', email: 'A@B.io', role }),
+      ).toThrow();
+    }
+  });
+
+  it('accepts an optional role on updateUserSchema and omits it when absent', () => {
+    expect(updateUserSchema.parse({ role: 'surveillance' }).role).toBe(
+      'surveillance',
+    );
+    expect(Object.keys(updateUserSchema.parse({ name: 'x' }))).not.toContain(
+      'role',
+    );
+  });
+
+  it('keeps self-escalation closed — updateMeSchema has no role key', () => {
+    expect(Object.keys(updateMeSchema.parse({ name: 'x' }))).not.toContain(
+      'role',
+    );
+    expect(
+      Object.keys(
+        updateMeSchema.parse({ name: 'x', role: 'admin' } as never),
+      ),
+    ).not.toContain('role');
+  });
 });

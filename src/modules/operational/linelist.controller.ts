@@ -1,6 +1,8 @@
-import { Controller, Get, Query, Req } from '@nestjs/common';
+import { Controller, Get, Query, Req, UseInterceptors } from '@nestjs/common';
 
+import { NoStoreInterceptor } from '../../common/interceptors/no-store.interceptor.js';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe.js';
+import { hasRole, SURVEILLANCE_ROLE } from '../../common/roles.js';
 import {
   linelistQuerySchema,
   type LinelistQueryDto,
@@ -28,10 +30,11 @@ export function resolveLinelistAccess(
   return {
     userId,
     role,
-    allowPii: userId !== null,
+    allowPii: userId !== null && hasRole(role, SURVEILLANCE_ROLE),
   };
 }
 
+@UseInterceptors(NoStoreInterceptor)
 @Controller('api/operational/linelist')
 export class LinelistController {
   constructor(private readonly linelist: LinelistService) {}

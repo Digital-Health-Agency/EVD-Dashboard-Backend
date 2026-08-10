@@ -24,7 +24,7 @@ interface Call {
   values?: unknown[];
 }
 
-function harness() {
+function harness(audit: { record: ReturnType<typeof vi.fn> } = { record: vi.fn() }) {
   const calls: Call[] = [];
   const db = {
     query: vi.fn((sql: string, values?: unknown[]) => {
@@ -39,7 +39,14 @@ function harness() {
     }),
   } as unknown as Queryable;
 
-  return { service: new LinelistService(db), calls };
+  return {
+    service: new LinelistService(
+      db,
+      audit as unknown as ConstructorParameters<typeof LinelistService>[1],
+    ),
+    calls,
+    audit,
+  };
 }
 
 function parse(raw: Record<string, unknown> = {}) {
@@ -69,6 +76,28 @@ function projectionOf(sql: string): string[] {
   expect(match).not.toBeNull();
   return (match as RegExpExecArray)[1].split(',').map((name) => name.trim());
 }
+
+function baseProjectionOf(sql: string): string[] {
+  const match = /WITH base AS \(\n\s+SELECT\n([\s\S]*?)\n\s+FROM gold/.exec(sql);
+  expect(match).not.toBeNull();
+  return (match as RegExpExecArray)[1].split(',').map((name) => name.trim());
+}
+
+const DATASETS = [
+  ['labResults', LAB_RESULT_COLUMNS],
+  ['screenings', SCREENING_COLUMNS],
+  ['cases', CASE_INVESTIGATION_COLUMNS],
+  ['outcomes', TREATMENT_OUTCOME_COLUMNS],
+  ['contacts', CONTACT_REGISTRATION_COLUMNS],
+  ['signals', COMMUNITY_SIGNAL_COLUMNS],
+] as const;
+
+const DENIED = { userId: 'u-9', role: 'user', allowPii: false } as const;
+const AUTHORISED = {
+  userId: 'u-1',
+  role: 'surveillance',
+  allowPii: true,
+} as const;
 
 describe('LinelistService projection', () => {
   it.each([
@@ -135,13 +164,9 @@ describe('LinelistService projection', () => {
     ).toEqual(Object.keys(COMMUNITY_SIGNAL_COLUMNS));
   });
 
-  it('returns the authorised registry default set for community signals with identifying columns', async () => {
+  it('pre-selects no identifying column for community signals even for an authorised caller', async () => {
     const { service, calls } = harness();
-    await service.signals(parse(), {
-      userId: 'u-1',
-      role: 'viewer',
-      allowPii: true,
-    });
+    const page = await service.signals(parse(), AUTHORISED);
 
     const sql = rowStatement(calls).sql;
     const projection = projectionOf(sql);
@@ -150,17 +175,14 @@ describe('LinelistService projection', () => {
     );
 
     for (const column of piiColumns(COMMUNITY_SIGNAL_COLUMNS)) {
-      expect(projection).toContain(column);
+      expect(projection).not.toContain(column);
+      expect(page.availableColumns.map((entry) => entry.name)).toContain(column);
     }
   });
 
-  it('returns the authorised registry default set for screenings with identifying columns', async () => {
+  it('pre-selects no identifying column for screenings even for an authorised caller', async () => {
     const { service, calls } = harness();
-    await service.screenings(parse(), {
-      userId: 'u-1',
-      role: 'viewer',
-      allowPii: true,
-    });
+    const page = await service.screenings(parse(), AUTHORISED);
 
     const sql = rowStatement(calls).sql;
     const projection = projectionOf(sql);
@@ -169,7 +191,8 @@ describe('LinelistService projection', () => {
     );
 
     for (const column of piiColumns(SCREENING_COLUMNS)) {
-      expect(projection).toContain(column);
+      expect(projection).not.toContain(column);
+      expect(page.availableColumns.map((entry) => entry.name)).toContain(column);
     }
   });
 
@@ -300,6 +323,127 @@ describe('LinelistService pii access', () => {
   });
 });
 
+describe('LinelistService pii denial audit', () => {
+  const PII_DATASETS = [
+    ['labResults', 'subject_identifier', 'lab_result'],
+    ['screenings', 'person_name', 'screening'],
+    ['cases', 'source_person_identifier', 'case_investigation'],
+    ['outcomes', 'source_person_name', 'treatment_outcome'],
+    ['contacts', 'source_contact_identifier', 'contact_registration'],
+    ['signals', 'signal_description', 'community_signal'],
+  ] as const;
+
+  function silenceLogger() {
+    return vi
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  describe.each(PII_DATASETS)(
+    '%s',
+    (method, column, dataset) => {
+      it('records exactly one pii_column_denied event for a refused caller', async () => {
+        silenceLogger();
+        const { service, audit } = harness();
+        await service[method](parse({ fields: column }), DENIED);
+
+        expect(audit.record).toHaveBeenCalledTimes(1);
+        expect(audit.record).toHaveBeenCalledWith({
+          eventType: 'pii_column_denied',
+          actorId: DENIED.userId,
+          actorRole: DENIED.role,
+          dataset,
+          columns: [column],
+          filters: {},
+          rowCount: null,
+          outcome: 'denied',
+        });
+      });
+
+      it('records nothing for an authorised caller naming the same column', async () => {
+        silenceLogger();
+        const { service, audit } = harness();
+        await service[method](parse({ fields: column }), AUTHORISED);
+
+        expect(audit.record).not.toHaveBeenCalled();
+      });
+
+      it('still serves a usable projection to the refused caller', async () => {
+        silenceLogger();
+        const { service } = harness();
+        const page = await service[method](parse({ fields: column }), DENIED);
+
+        expect(page.columns.length).toBeGreaterThan(0);
+        expect(page.availableColumns.length).toBeGreaterThan(0);
+        expect(page.columns.map((entry) => entry.name)).not.toContain(column);
+      });
+    },
+  );
+
+  it('records nothing when the request names only non-identifying columns', async () => {
+    silenceLogger();
+    const { service, audit } = harness();
+    await service.signals(parse({ fields: 'signal_verified' }), DENIED);
+
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('records nothing when the request names no columns at all', async () => {
+    silenceLogger();
+    const { service, audit } = harness();
+    await service.signals(parse(), DENIED);
+
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('emits the existing refusal warning alongside the audit record', async () => {
+    const warn = silenceLogger();
+    const { service, audit } = harness();
+    await service.signals(parse({ fields: 'signal_description' }), DENIED);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain('pii projection refused');
+    expect(audit.record).toHaveBeenCalledTimes(1);
+  });
+
+  it('never carries an unknown or prototype-polluting field name into the audit row', async () => {
+    silenceLogger();
+    const { service, audit } = harness();
+    await service.signals(
+      parse({
+        fields: '__proto__,constructor,no_such_column,*,signal_description',
+      }),
+      DENIED,
+    );
+
+    expect(audit.record).toHaveBeenCalledTimes(1);
+    const event = audit.record.mock.calls[0][0] as { columns: string[] };
+    expect(event.columns).toEqual(['signal_description']);
+  });
+
+  it('resolves the request normally when the audit write rejects', async () => {
+    silenceLogger();
+    const rejection = Promise.reject(new Error('audit sink unavailable'));
+    rejection.catch(() => undefined);
+    const { service, audit } = harness({
+      record: vi.fn(() => rejection),
+    });
+
+    const page = await service.signals(
+      parse({ fields: 'signal_description' }),
+      DENIED,
+    );
+
+    expect(audit.record).toHaveBeenCalledTimes(1);
+    expect(page.columns.length).toBeGreaterThan(0);
+    expect(page.total).toBe(TOTAL_FROM_COUNT_QUERY);
+  });
+});
+
 describe('LinelistService paging', () => {
   it('binds limit and offset as parameters computed from page and limit', async () => {
     const { service, calls } = harness();
@@ -362,8 +506,12 @@ describe('LinelistService ordering', () => {
   it('refuses to order on an identifying column', async () => {
     const { service, calls } = harness();
     await service.signals(
-      parse({ sortBy: 'signal_description', sortDir: 'asc' }),
-      { userId: 'u-1', role: 'viewer', allowPii: true },
+      parse({
+        sortBy: 'signal_description',
+        sortDir: 'asc',
+        fields: 'signal_description',
+      }),
+      { userId: 'u-1', role: 'surveillance', allowPii: true },
     );
 
     const sql = rowStatement(calls).sql;
@@ -385,15 +533,26 @@ describe('LinelistService search', () => {
       .map((column) => `${column} ILIKE $1`)
       .join(' OR ');
 
+    expect(searchable).toEqual(['county', 'subcounty', 'community_unit']);
     expect(row.sql).toContain(`(${disjunction})`);
     expect(row.values).toEqual(['%nairobi%', 50, 0]);
     expect(row.sql).not.toContain('nairobi');
     expect(countStatement(calls).values).toEqual(['%nairobi%']);
   });
 
-  it('scans identifying columns selected by the registry', async () => {
+  it('scans no identifying column for a caller the registry denies them to', async () => {
     const { service, calls } = harness();
-    await service.signals(parse({ q: 'anything' }));
+    await service.signals(parse({ q: 'anything' }), DENIED);
+
+    const sql = rowStatement(calls).sql;
+    for (const column of piiColumns(COMMUNITY_SIGNAL_COLUMNS)) {
+      expect(sql).not.toContain(column);
+    }
+  });
+
+  it('scans identifying columns for an authorised caller', async () => {
+    const { service, calls } = harness();
+    await service.signals(parse({ q: 'anything' }), AUTHORISED);
 
     const sql = rowStatement(calls).sql;
     for (const column of piiColumns(COMMUNITY_SIGNAL_COLUMNS)) {
@@ -417,6 +576,79 @@ describe('LinelistService search', () => {
     expect(row.values?.filter((value) => value === '%anything%')).toHaveLength(1);
   });
 });
+
+describe.each(DATASETS)(
+  '%s SQL under a denied caller',
+  (method, registry) => {
+    it('names no identifying column in the row statement, with or without a search term', async () => {
+      for (const raw of [{ q: 'wanjiku' }, {}]) {
+        const { service, calls } = harness();
+        await service[method](parse(raw), DENIED);
+
+        const sql = rowStatement(calls).sql;
+        for (const column of piiColumns(registry)) {
+          expect(sql, `${method} ${column}`).not.toContain(column);
+        }
+      }
+    });
+
+    it('names no identifying column in the count statement either', async () => {
+      for (const raw of [{ q: 'wanjiku' }, {}]) {
+        const { service, calls } = harness();
+        await service[method](parse(raw), DENIED);
+
+        const sql = countStatement(calls).sql;
+        for (const column of piiColumns(registry)) {
+          expect(sql, `${method} ${column}`).not.toContain(column);
+        }
+      }
+    });
+
+    it('still binds the pattern positionally and still serves a usable projection', async () => {
+      const { service, calls } = harness();
+      const page = await service[method](parse({ q: 'wanjiku' }), DENIED);
+
+      const row = rowStatement(calls);
+      expect(row.sql).not.toContain('wanjiku');
+      expect(row.sql).toMatch(/ILIKE \$\d+/);
+      expect(row.values).toContain('%wanjiku%');
+      expect(countStatement(calls).values).toContain('%wanjiku%');
+
+      const projection = projectionOf(row.sql);
+      expect(projection.length).toBeGreaterThan(0);
+      expect(projection).toEqual(resolveFields(registry));
+      expect(page.columns.length).toBeGreaterThan(0);
+    });
+  },
+);
+
+describe.each(DATASETS)(
+  '%s SQL under an authorised caller',
+  (method, registry) => {
+    it('scans every identifying column in the search disjunction', async () => {
+      const { service, calls } = harness();
+      await service[method](parse({ q: 'wanjiku' }), AUTHORISED);
+
+      const sql = rowStatement(calls).sql;
+      for (const column of piiColumns(registry)) {
+        expect(sql, `${method} ${column}`).toMatch(
+          new RegExp(`\\b${column} ILIKE \\$\\d+`),
+        );
+      }
+    });
+
+    it('projects an identifying column in the base CTE once it is selected', async () => {
+      for (const column of piiColumns(registry)) {
+        const { service, calls } = harness();
+        await service[method](parse({ fields: column }), AUTHORISED);
+
+        const sql = rowStatement(calls).sql;
+        expect(projectionOf(sql), `${method} ${column}`).toEqual([column]);
+        expect(baseProjectionOf(sql), `${method} ${column}`).toContain(column);
+      }
+    });
+  },
+);
 
 describe('LinelistService window resolution', () => {
   it('anchors a preset to the table max and issues a bounds sub-select', async () => {

@@ -145,7 +145,7 @@ export const LAB_RESULT_COLUMNS = Object.freeze({
     column: 'subject_identifier',
     exposure: 'pii',
     sortable: false,
-    byDefault: true,
+    byDefault: false,
     searchable: true,
   },
 } as const satisfies Record<string, ColumnSpec>);
@@ -241,14 +241,14 @@ export const SCREENING_COLUMNS = Object.freeze({
     column: 'person_name',
     exposure: 'pii',
     sortable: false,
-    byDefault: true,
+    byDefault: false,
     searchable: true,
   },
   person_identifier: {
     column: 'person_identifier',
     exposure: 'pii',
     sortable: false,
-    byDefault: true,
+    byDefault: false,
     searchable: true,
   },
 } as const satisfies Record<string, ColumnSpec>);
@@ -386,14 +386,14 @@ export const CASE_INVESTIGATION_COLUMNS = Object.freeze({
     column: 'source_person_name',
     exposure: 'pii',
     sortable: false,
-    byDefault: true,
+    byDefault: false,
     searchable: true,
   },
   source_person_identifier: {
     column: 'source_person_identifier',
     exposure: 'pii',
     sortable: false,
-    byDefault: true,
+    byDefault: false,
     searchable: true,
   },
 } as const satisfies Record<string, ColumnSpec>);
@@ -538,14 +538,14 @@ export const TREATMENT_OUTCOME_COLUMNS = Object.freeze({
     column: 'source_person_name',
     exposure: 'pii',
     sortable: false,
-    byDefault: true,
+    byDefault: false,
     searchable: true,
   },
   source_person_identifier: {
     column: 'source_person_identifier',
     exposure: 'pii',
     sortable: false,
-    byDefault: true,
+    byDefault: false,
     searchable: true,
   },
 } as const satisfies Record<string, ColumnSpec>);
@@ -662,14 +662,14 @@ export const CONTACT_REGISTRATION_COLUMNS = Object.freeze({
     column: 'source_contact_name',
     exposure: 'pii',
     sortable: false,
-    byDefault: true,
+    byDefault: false,
     searchable: true,
   },
   source_contact_identifier: {
     column: 'source_contact_identifier',
     exposure: 'pii',
     sortable: false,
-    byDefault: true,
+    byDefault: false,
     searchable: true,
   },
 } as const satisfies Record<string, ColumnSpec>);
@@ -770,7 +770,7 @@ export const COMMUNITY_SIGNAL_COLUMNS = Object.freeze({
     column: 'signal_description',
     exposure: 'pii',
     sortable: false,
-    byDefault: true,
+    byDefault: false,
     searchable: true,
   },
 } as const satisfies Record<string, ColumnSpec>);
@@ -908,9 +908,13 @@ export function resolveSort(
   return { column: spec.column, direction };
 }
 
-export function searchableColumns(registry: DatasetRegistry): string[] {
+export function searchableColumns(
+  registry: DatasetRegistry,
+  access: FieldAccess = {},
+): string[] {
   return Object.values(registry)
     .filter((spec) => spec.searchable)
+    .filter((spec) => fieldPermitted(spec, access))
     .map((spec) => spec.column);
 }
 
