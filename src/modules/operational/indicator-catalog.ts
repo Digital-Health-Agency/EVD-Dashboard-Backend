@@ -135,6 +135,19 @@ export const INDICATOR_CATALOG: Readonly<
     securityClassification: RESTRICTED,
     baselineQualityStatus: POE_BASELINE,
   },
+  'poe.dailyScreenings': {
+    indicatorId: 'poe.dailyScreenings',
+    displayName: 'Screenings by Day',
+    definition:
+      'Screenings in the selected window summed per calendar day of the screening event, scoped to the traveller surveillance pathway. Days inside the window with no screening are reported as zero, not omitted.',
+    countingUnit: 'screenings',
+    sourceSystem: ['ADAM'],
+    refreshFrequency: 'Near real-time',
+    allowedFilters: POE_ALLOWED_FILTERS,
+    breakdown: ['day'],
+    securityClassification: RESTRICTED,
+    baselineQualityStatus: POE_BASELINE,
+  },
   'poe.byPointOfEntry': {
     indicatorId: 'poe.byPointOfEntry',
     displayName: 'Screenings by point of entry',
