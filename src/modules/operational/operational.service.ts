@@ -15,6 +15,13 @@ import {
   type Provenance,
 } from '../../common/analytics-helpers.js';
 import {
+  activeSurveillanceEvent,
+  clampToSurveillanceStart,
+  anchoredWindowLowerBound,
+  resolveSurveillanceStartDate,
+  surveillanceFloorPredicate,
+} from '../../common/surveillance-event.js';
+import {
   catalogEntry,
   catalogSources,
   withRuntimeMeta,
@@ -340,6 +347,7 @@ export class OperationalService {
           turnaroundBand: filters.turnaroundBand ?? null,
         },
         window,
+        surveillanceEvent: activeSurveillanceEvent(),
         sources: catalogSources([
           'labs.testsDone',
           'labs.positiveTests',
@@ -456,6 +464,7 @@ export class OperationalService {
           screeningCategory: filters.screeningCategory ?? null,
         },
         window,
+        surveillanceEvent: activeSurveillanceEvent(),
         provenance: {
           cards: provenance,
           chart: provenance,
@@ -596,6 +605,7 @@ export class OperationalService {
           facility: filters.facility ?? null,
         },
         window,
+        surveillanceEvent: activeSurveillanceEvent(),
         provenance: {
           cards: provenance,
           chart: provenance,
@@ -681,6 +691,7 @@ export class OperationalService {
           classification: filters.classification ?? null,
         },
         window,
+        surveillanceEvent: activeSurveillanceEvent(),
         provenance: {
           cards: provenance,
           chart: provenance,
@@ -781,6 +792,7 @@ export class OperationalService {
           communitySource: filters.communitySource ?? null,
         },
         window,
+        surveillanceEvent: activeSurveillanceEvent(),
         provenance: {
           cards: provenance,
           chart: provenance,
@@ -994,6 +1006,7 @@ export class OperationalService {
           to: filters.to ?? null,
         },
         window,
+        surveillanceEvent: activeSurveillanceEvent(),
         provenance: {
           alerts: caseProvenance,
           cases: caseProvenance,
@@ -1039,21 +1052,31 @@ export class OperationalService {
         predicate:
           `event_at >= $${nextParamIndex}::timestamptz` +
           ` AND event_at <= $${nextParamIndex + 1}::timestamptz`,
-        params: [filters.from, filters.to],
+        params: [
+          filters.from ? clampToSurveillanceStart(filters.from) : filters.from,
+          filters.to,
+        ],
         anchored: false,
       };
     }
 
     if (filters.period === 'all') {
-      return { predicate: 'event_at IS NOT NULL', params: [], anchored: false };
+      return {
+        predicate: surveillanceFloorPredicate('event_at', `$${nextParamIndex}`),
+        params: [resolveSurveillanceStartDate()],
+        anchored: false,
+      };
     }
 
     const interval = PERIOD_INTERVALS[filters.period];
     return {
       predicate:
-        `event_at > ${boundsMaxEventAt} - interval '${interval}'` +
-        ` AND event_at <= ${boundsMaxEventAt}`,
-      params: [],
+        `${anchoredWindowLowerBound(
+          'event_at',
+          `${boundsMaxEventAt} - interval '${interval}'`,
+          `$${nextParamIndex}`,
+        )}` + ` AND event_at <= ${boundsMaxEventAt}`,
+      params: [resolveSurveillanceStartDate()],
       anchored: true,
     };
   }

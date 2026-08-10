@@ -1,4 +1,5 @@
 import type { Provenance } from '../../common/analytics-helpers.js';
+import type { SurveillanceEvent } from '../../common/surveillance-event.js';
 
 export type TabKey =
   | 'summary'
@@ -112,6 +113,7 @@ export interface TabPayload {
     tab: TabKey;
     filters: Record<string, string | null>;
     window: TabWindow;
+    surveillanceEvent: SurveillanceEvent;
     sources?: string[];
     provenance: Record<string, Provenance>;
   };
