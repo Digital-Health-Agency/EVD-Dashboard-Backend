@@ -14,8 +14,7 @@ import {
   type UserInviteSender,
 } from './user-invite.service.js';
 import type { RequestAppId } from '../../common/app-id.js';
-
-const allowedRoles = new Set<AuthRole>(['user', 'admin']);
+import { normalizeRoleString } from '../../common/roles.js';
 
 @Injectable()
 export class UserAccountService {
@@ -30,10 +29,7 @@ export class UserAccountService {
   }
 
   private normalizeRole(role?: string): AuthRole {
-    if (role && allowedRoles.has(role as AuthRole)) {
-      return role as AuthRole;
-    }
-    return 'user';
+    return normalizeRoleString(role);
   }
 
   private async hashPassword(password: string): Promise<string> {
@@ -220,6 +216,8 @@ export class UserAccountService {
 
     const banned =
       dto.banned !== undefined ? dto.banned : Boolean(current.banned);
+    const role =
+      dto.role !== undefined ? this.normalizeRole(dto.role) : current.role;
     const result = await this.db.query<AuthUserRecord>(
       `
         UPDATE "user"
@@ -240,12 +238,13 @@ export class UserAccountService {
         dto.email !== undefined
           ? this.normalizeEmail(dto.email)
           : current.email,
-        dto.role !== undefined ? this.normalizeRole(dto.role) : current.role,
+        role,
         banned,
         dto.banned === false ? null : (current.banReason ?? null),
         dto.banned === false ? null : (current.banExpires ?? null),
       ],
     );
+    if (role !== current.role) await this.revokeSessions(id);
     return this.serialize(result.rows[0]);
   }
 

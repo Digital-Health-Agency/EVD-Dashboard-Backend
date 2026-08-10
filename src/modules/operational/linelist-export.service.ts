@@ -12,6 +12,7 @@ import {
   LAB_RESULT_COLUMNS,
   SCREENING_COLUMNS,
   TREATMENT_OUTCOME_COLUMNS,
+  piiColumns,
   resolveSort,
   type DatasetRegistry,
   type LinelistColumn,
@@ -27,14 +28,17 @@ import {
   LAB_RESULT_FILTERS,
   SCREENING_BASE_FILTERS,
   PII_DENIED,
+  projectionSink,
   resolveLinelistProjection,
   SCREENING_FILTERS,
   TREATMENT_OUTCOME_FILTERS,
   type BaseFilters,
   type FilterColumns,
   type LinelistAccess,
+  type LinelistProjectionSink,
   type LinelistRow,
 } from './linelist.service.js';
+import { AuditService } from '../audit/audit.service.js';
 
 const CURSOR_NAME = 'linelist_export';
 const FETCH_SIZE = 500;
@@ -55,6 +59,7 @@ export interface LinelistExportWindow {
 
 export interface LinelistExportResult {
   columns: LinelistColumn[];
+  piiColumns: string[];
   window: LinelistExportWindow;
   rows: AsyncIterable<LinelistRow>;
   close(): Promise<void>;
@@ -76,10 +81,15 @@ interface PreparedExport {
 export class LinelistExportService {
   private readonly logger = new Logger(LinelistExportService.name);
 
+  private readonly sink: LinelistProjectionSink;
+
   constructor(
     @Inject(ANALYTICS_POSTGRES_POOL)
     private readonly analyticsDb: ExportQueryable,
-  ) {}
+    private readonly audit: AuditService,
+  ) {
+    this.sink = projectionSink(this.logger, this.audit);
+  }
 
   labResults(
     query: LinelistExportQueryDto,
@@ -332,13 +342,16 @@ export class LinelistExportService {
     definition: PreparedExport,
   ): Promise<LinelistExportResult> {
     const columns = resolveLinelistProjection(
-      this.logger,
+      this.sink,
       definition.dataset,
       definition.registry,
       query,
       access,
     );
     const fields = columns.map((column) => column.name);
+    // What was actually served, not what was asked for.
+    const registryPii = new Set(piiColumns(definition.registry));
+    const servedPii = fields.filter((name) => registryPii.has(name));
     const order = resolveSort(
       definition.registry,
       query.sortBy,
@@ -353,6 +366,7 @@ export class LinelistExportService {
       order,
       definition.keyColumn,
       definition.baseFilters,
+      access,
     );
     const rowSql = definition.rowSql
       .replace('__BASE_PROJECTION__', scope.baseProjection)
@@ -395,7 +409,7 @@ export class LinelistExportService {
         release();
       }, rollback);
 
-      return { columns, window, rows, close: rollback };
+      return { columns, piiColumns: servedPii, window, rows, close: rollback };
     } catch (error) {
       await rollback();
       throw error;

@@ -11,6 +11,7 @@ import { UploadModule } from './modules/upload/upload.module.js';
 import { MailModule } from './modules/mail/mail.module.js';
 import { SmsModule } from './modules/sms/sms.module.js';
 import { AnalyticsModule } from './modules/analytics/analytics.module.js';
+import { AuditModule } from './modules/audit/audit.module.js';
 import { OperationalModule } from './modules/operational/operational.module.js';
 import { HealthController } from './health.controller.js';
 
@@ -35,6 +36,7 @@ const uploadRoot = resolve(process.cwd(), process.env.UPLOAD_DIR ?? 'uploads');
     MailModule,
     SmsModule,
     AnalyticsModule,
+    AuditModule,
     OperationalModule,
   ],
   controllers: [HealthController],

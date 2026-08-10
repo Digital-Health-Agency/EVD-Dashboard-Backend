@@ -21,6 +21,10 @@ import {
   type LinelistColumn,
   type ResolvedSort,
 } from './column-registry.js';
+import {
+  AuditService,
+  type AuditEventInput,
+} from '../audit/audit.service.js';
 import type { LinelistQueryDto } from './dto/linelist-query.dto.js';
 import type { LinelistExportQueryDto } from './dto/linelist-export-query.dto.js';
 
@@ -143,8 +147,13 @@ export interface LinelistScope {
 
 type ProjectionQuery = Pick<LinelistQueryDto, 'fields'>;
 
+export interface LinelistProjectionSink {
+  warn(message: string): void;
+  recordPiiDenial(event: AuditEventInput): void;
+}
+
 export function resolveLinelistProjection(
-  logger: Pick<Logger, 'warn'>,
+  sink: LinelistProjectionSink,
   dataset: string,
   registry: DatasetRegistry,
   query: ProjectionQuery,
@@ -160,23 +169,50 @@ export function resolveLinelistProjection(
       `user=${access.userId ?? 'unknown'}` +
       ` role=${access.role ?? 'unknown'}`;
     const what = `dataset=${dataset} columns=${asked.join(',')}`;
-    logger.warn(
+    sink.warn(
       access.allowPii
         ? `pii projection served: ${who} ${what}`
         : `pii projection refused: ${who} ${what}`,
     );
+    if (!access.allowPii) {
+      sink.recordPiiDenial({
+        eventType: 'pii_column_denied',
+        actorId: access.userId,
+        actorRole: access.role,
+        dataset,
+        columns: asked,
+        filters: {},
+        rowCount: null,
+        outcome: 'denied',
+      });
+    }
   }
 
   return columns;
+}
+
+export function projectionSink(
+  logger: Pick<Logger, 'warn'>,
+  audit: AuditService,
+): LinelistProjectionSink {
+  return {
+    warn: (message) => logger.warn(message),
+    recordPiiDenial: (event) => void audit.record(event),
+  };
 }
 
 @Injectable()
 export class LinelistService {
   private readonly logger = new Logger(LinelistService.name);
 
+  private readonly sink: LinelistProjectionSink;
+
   constructor(
     @Inject(ANALYTICS_POSTGRES_POOL) private readonly analyticsDb: Queryable,
-  ) {}
+    private readonly audit: AuditService,
+  ) {
+    this.sink = projectionSink(this.logger, this.audit);
+  }
 
   private projection(
     dataset: string,
@@ -185,7 +221,7 @@ export class LinelistService {
     access: LinelistAccess,
   ): LinelistColumn[] {
     return resolveLinelistProjection(
-      this.logger,
+      this.sink,
       dataset,
       registry,
       query,
@@ -214,6 +250,7 @@ export class LinelistService {
       order,
       'lab_result_key',
       LAB_RESULT_BASE_FILTERS,
+      access,
     );
 
     const rowSql = `
@@ -282,6 +319,7 @@ export class LinelistService {
       query.screeningScope === 'facility'
         ? FACILITY_SCREENING_BASE_FILTERS
         : SCREENING_BASE_FILTERS,
+      access,
     );
 
     const rowSql = `
@@ -344,6 +382,8 @@ export class LinelistService {
       fields,
       order,
       'case_investigation_key',
+      [],
+      access,
     );
 
     const rowSql = `
@@ -406,6 +446,8 @@ export class LinelistService {
       fields,
       order,
       'treatment_outcome_key',
+      [],
+      access,
     );
 
     const rowSql = `
@@ -476,6 +518,8 @@ export class LinelistService {
       fields,
       order,
       'contact_registration_key',
+      [],
+      access,
     );
 
     const rowSql = `
@@ -533,6 +577,8 @@ export class LinelistService {
       fields,
       order,
       'community_signal_key',
+      [],
+      access,
     );
 
     const rowSql = `
@@ -603,6 +649,7 @@ export class LinelistService {
     order: ResolvedSort,
     keyColumn: string,
     baseFilters: BaseFilters = [],
+    access: LinelistAccess = PII_DENIED,
   ): LinelistScope {
     return buildLinelistScope(
       query,
@@ -612,6 +659,7 @@ export class LinelistService {
       order,
       keyColumn,
       baseFilters,
+      access,
     );
   }
 }
@@ -624,6 +672,7 @@ export function buildLinelistScope(
   order: ResolvedSort,
   keyColumn: string,
   baseFilters: BaseFilters = [],
+  access: LinelistAccess = PII_DENIED,
 ): LinelistScope {
     const params: unknown[] = [];
     const clauses: string[] = [];
@@ -679,7 +728,9 @@ export function buildLinelistScope(
       );
     }
 
-    const searchable = searchableColumns(registry);
+    const searchable = searchableColumns(registry, {
+      allowPii: access.allowPii,
+    });
     if (
       typeof query.q === 'string' &&
       query.q.length > 0 &&

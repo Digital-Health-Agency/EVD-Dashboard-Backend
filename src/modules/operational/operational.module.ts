@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { AuditModule } from '../audit/audit.module.js';
 import { LinelistController } from './linelist.controller.js';
 import { LinelistExportController } from './linelist-export.controller.js';
 import { LinelistExportService } from './linelist-export.service.js';
@@ -9,6 +10,7 @@ import { OperationalOptionsService } from './operational-options.service.js';
 import { OperationalService } from './operational.service.js';
 
 @Module({
+  imports: [AuditModule],
   controllers: [
     OperationalController,
     LinelistController,
