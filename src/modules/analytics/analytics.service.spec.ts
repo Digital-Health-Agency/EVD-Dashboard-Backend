@@ -240,4 +240,31 @@ describe('AnalyticsService', () => {
       expect(call.values).toContain(SURVEILLANCE_START);
     }
   });
+
+  it('dates lastUpdated in Kenyan local time, not UTC', async () => {
+    const calls: Call[] = [];
+    const db: Queryable = {
+      query: vi.fn((sql: string, values?: unknown[]) => {
+        calls.push({ sql, values });
+        return rows([]);
+      }),
+    };
+
+    await new AnalyticsService(db).getMetrics();
+
+    const lastUpdated = calls.find((call) => call.sql.includes(') updates'));
+    expect(lastUpdated).toBeDefined();
+    expect(lastUpdated!.sql).toContain("AT TIME ZONE 'Africa/Nairobi'");
+    expect(lastUpdated!.sql).not.toContain("AT TIME ZONE 'UTC'");
+  });
+
+  it('reports no lastUpdated when the warehouse is empty', async () => {
+    const db: Queryable = {
+      query: vi.fn(() => rows([])),
+    };
+
+    const metrics = await new AnalyticsService(db).getMetrics();
+
+    expect(metrics.meta.lastUpdated).toBeNull();
+  });
 });
