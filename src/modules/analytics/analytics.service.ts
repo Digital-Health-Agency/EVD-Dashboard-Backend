@@ -20,6 +20,7 @@ interface NumberRow extends QueryResultRow {
 }
 
 const GOLD_SOURCE = 'gold analytics warehouse';
+const REPORTING_TIME_ZONE = 'Africa/Nairobi';
 const EVD_LAB_TEST_CODE = '86518-8';
 const CASE_EVENT_AT = `coalesce(investigation_datetime, reporting_date::timestamptz)`;
 const OUTCOME_EVENT_AT = `coalesce(
@@ -122,10 +123,10 @@ export class AnalyticsService {
     return result.rows;
   }
 
-  private async lastUpdated(): Promise<string> {
+  private async lastUpdated(): Promise<string | null> {
     const row = await this.one<{ last_updated: string | null }>(
       `
-      SELECT to_char(max(updated_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS last_updated
+      SELECT to_char(max(updated_at) AT TIME ZONE '${REPORTING_TIME_ZONE}', 'YYYY-MM-DD') AS last_updated
       FROM (
         SELECT max(coalesce(investigation_datetime, reporting_date::timestamptz)) AS updated_at
         FROM gold.report_case_investigation
@@ -147,7 +148,7 @@ export class AnalyticsService {
       [EVD_LAB_TEST_CODE],
     );
     const lastUpdated = row.last_updated;
-    if (!lastUpdated) return new Date().toISOString();
+    if (!lastUpdated) return null;
     return `${lastUpdated}T00:00:00.000Z`;
   }
 
