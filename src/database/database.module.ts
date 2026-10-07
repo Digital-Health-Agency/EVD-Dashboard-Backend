@@ -214,6 +214,32 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       );
       CREATE INDEX IF NOT EXISTS audit_events_actor_idx ON audit_events ("actorId", "createdAt" DESC);
       CREATE INDEX IF NOT EXISTS audit_events_type_idx ON audit_events ("eventType", "createdAt" DESC);
+
+      CREATE TABLE IF NOT EXISTS headline_overrides (
+        situation_date text PRIMARY KEY,
+        report_date text,
+        source_label text,
+        notes text,
+        confirmed_cases integer,
+        confirmed_cases_24h integer,
+        recoveries integer,
+        deaths integer,
+        samples_tested_total integer,
+        samples_tested_24h integer,
+        positive_samples integer,
+        negative_samples integer,
+        travellers_screened_total integer,
+        travellers_screened_24h integer,
+        screening_points integer,
+        contacts_listed integer,
+        "updatedBy" text,
+        "createdAt" timestamptz NOT NULL DEFAULT now(),
+        "updatedAt" timestamptz NOT NULL DEFAULT now()
+      );
+      ALTER TABLE headline_overrides ADD COLUMN IF NOT EXISTS operational_override boolean NOT NULL DEFAULT false;
+      ALTER TABLE headline_overrides ADD COLUMN IF NOT EXISTS revision integer NOT NULL DEFAULT 1;
+      ALTER TABLE headline_overrides ADD COLUMN IF NOT EXISTS record_id text NOT NULL DEFAULT '';
+      UPDATE headline_overrides SET record_id = 'legacy:' || situation_date WHERE record_id = '';
     `);
   }
 }

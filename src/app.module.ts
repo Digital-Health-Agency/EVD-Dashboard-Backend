@@ -13,6 +13,7 @@ import { SmsModule } from './modules/sms/sms.module.js';
 import { AnalyticsModule } from './modules/analytics/analytics.module.js';
 import { AuditModule } from './modules/audit/audit.module.js';
 import { OperationalModule } from './modules/operational/operational.module.js';
+import { ReconciliationModule } from './modules/reconciliation/reconciliation.module.js';
 import { HealthController } from './health.controller.js';
 
 const uploadRoot = resolve(process.cwd(), process.env.UPLOAD_DIR ?? 'uploads');
@@ -38,6 +39,7 @@ const uploadRoot = resolve(process.cwd(), process.env.UPLOAD_DIR ?? 'uploads');
     AnalyticsModule,
     AuditModule,
     OperationalModule,
+    ReconciliationModule,
   ],
   controllers: [HealthController],
 })

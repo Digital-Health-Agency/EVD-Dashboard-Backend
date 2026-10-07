@@ -55,3 +55,10 @@
 ## 3.2.0 (2026-08-05)
 - Ship analytics and public-landing backend support, and re-enable the production deploy webhook.
 
+## 3.8.0 (2026-10-07)
+- Enter official dated headline figures through reconciliation APIs using an explicit reconciliation role, independently of admin access.
+- Keep public cumulative figures current by carrying forward earlier official values when a new record leaves them blank; 24-hour figures remain specific to the latest date.
+- Enable a record's operational override to apply confirmed cases, recoveries and deaths to the national Summary and recalculate CFR. New records default to override off.
+- Read each record's before/after audit history separately from general audit views, including after clearing a record. Figure writes and audit events commit together.
+- Prevent stale amendments and clearing with required revision and record identity checks; HTTP 409 asks the editor to reload the latest record.
+- Seed nine source records with `npm run seed:headline`; existing dates are preserved on reruns. Document opt-in real PostgreSQL verification for rollback, concurrency, seeding and role boundaries.

@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { QueryResultRow } from 'pg';
 
 import {
@@ -13,7 +13,17 @@ import {
   source,
   stringValue,
 } from '../../common/analytics-helpers.js';
+import { nairobiToday } from '../../common/nairobi-date.js';
 import { resolveSurveillanceStartDate } from '../../common/surveillance-event.js';
+import {
+  applyHeadlineOverride,
+  warehouseHeadlineFigures,
+} from '../reconciliation/headline-override-merge.js';
+import type {
+  HeadlineFigures,
+  HeadlineOverrideRow,
+} from '../reconciliation/headline-override.schema.js';
+import { HeadlineOverrideService } from '../reconciliation/headline-override.service.js';
 
 interface NumberRow extends QueryResultRow {
   [key: string]: unknown;
@@ -33,8 +43,11 @@ const CONTACT_EVENT_AT = `coalesce(registration_datetime, registration_date::tim
 
 @Injectable()
 export class AnalyticsService {
+  private readonly logger = new Logger(AnalyticsService.name);
+
   constructor(
     @Inject(ANALYTICS_POSTGRES_POOL) private readonly analyticsDb: Queryable,
+    private readonly overrides: HeadlineOverrideService,
   ) {}
 
   async getMetrics() {
@@ -48,6 +61,7 @@ export class AnalyticsService {
       poeRows,
       poeTrend,
       geographyRows,
+      series,
     ] = await Promise.all([
       this.lastUpdated(),
       this.labSummary(),
@@ -58,9 +72,10 @@ export class AnalyticsService {
       this.poeRows(),
       this.poeTrend(),
       this.geographyRows(),
+      this.overrideSeries(),
     ]);
 
-    return {
+    const payload = {
       meta: {
         country: 'Kenya',
         disease: 'Ebola',
@@ -105,6 +120,41 @@ export class AnalyticsService {
       },
       source: GOLD_SOURCE,
     };
+
+    return applyHeadlineOverride(payload, series);
+  }
+
+  async getWarehouseHeadline(): Promise<{
+    figures: HeadlineFigures;
+    lastUpdated: string | null;
+  }> {
+    const [lastUpdated, labs, cases, poe, poeRows] = await Promise.all([
+      this.lastUpdated(),
+      this.labSummary(),
+      this.caseSummary(),
+      this.poeSummary(),
+      this.poeRows(),
+    ]);
+
+    return {
+      figures: warehouseHeadlineFigures({ labs, cases, poe, poeRows }),
+      lastUpdated,
+    };
+  }
+
+  private async overrideSeries(): Promise<HeadlineOverrideRow[]> {
+    try {
+      const today = nairobiToday();
+      const series = await this.overrides.list();
+      return series.filter((row) => row.situation_date <= today);
+    } catch (error: unknown) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      this.logger.error(
+        `headline override read failed: ${failure.message}`,
+        failure.stack,
+      );
+      return [];
+    }
   }
 
   private async one<T extends NumberRow>(

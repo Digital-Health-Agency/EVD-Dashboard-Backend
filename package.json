@@ -1,6 +1,6 @@
 {
   "name": "evd-server",
-  "version": "3.2.0",
+  "version": "3.8.0",
   "description": "Focused backend API for the DHA EVD dashboard stack",
   "author": "",
   "private": true,
@@ -19,7 +19,9 @@
     "test:debug": "vitest run --inspect-brk",
     "test:e2e": "vitest run --config ./vitest.config.ts",
     "seed:admin": "npx tsx src/scripts/seed-admin.ts",
-    "seed:admin:prod": "node dist/src/scripts/seed-admin.js"
+    "seed:admin:prod": "node dist/src/scripts/seed-admin.js",
+    "seed:headline": "npx tsx src/scripts/seed-headline-overrides.ts",
+    "seed:headline:prod": "node dist/src/scripts/seed-headline-overrides.js"
   },
   "dependencies": {
     "@better-auth/kysely-adapter": "^1.6.3",
