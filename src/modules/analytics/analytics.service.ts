@@ -60,6 +60,10 @@ export class AnalyticsService {
       this.geographyRows(),
     ]);
 
+    // Hardcorded values as we verify data with the gold team
+    cases.confirmed = 1;
+    cases.deaths = 1;
+
     return {
       meta: {
         country: 'Kenya',
