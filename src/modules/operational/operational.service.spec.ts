@@ -1,22 +1,39 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi, type Mock } from 'vitest';
+import { ConfigModule } from '@nestjs/config';
+import { Test } from '@nestjs/testing';
 import type { QueryResultRow } from 'pg';
 
-import type { Queryable } from '../../database/database.module.js';
+import { envConfig } from '../../config/env.config.js';
+import {
+  ANALYTICS_POSTGRES_POOL,
+  AUTH_POSTGRES_POOL,
+  DatabaseModule,
+  type Queryable,
+} from '../../database/database.module.js';
 import { pending, source } from '../../common/analytics-helpers.js';
+import type { HeadlineOverrideRow } from '../reconciliation/headline-override.schema.js';
+import { HeadlineOverrideService } from '../reconciliation/headline-override.service.js';
+import { OperationalModule } from './operational.module.js';
 import {
   buildBreakdown,
   buildCard,
   buildChart,
   earliest,
   inBoundedGroups,
+  isGeographicScope,
   latest,
+  nairobiToday,
   OperationalService,
+  resolvePeriodEnd,
 } from './operational.service.js';
 import type { TabPayload } from './tab-payload.js';
-import { operationalFiltersSchema } from './dto/operational-filters.dto.js';
+import {
+  operationalFiltersSchema,
+  type OperationalFiltersDto,
+} from './dto/operational-filters.dto.js';
 
 const FRESH_INGEST = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
 
@@ -102,13 +119,27 @@ function parse(input: Record<string, unknown>) {
   return operationalFiltersSchema.parse(input);
 }
 
+function overridesStub(row: HeadlineOverrideRow | null = null) {
+  return {
+    latestAtOrBefore: vi.fn(() => Promise.resolve(row)),
+  } as unknown as HeadlineOverrideService;
+}
+
+function seriesRead(series: HeadlineOverrideService) {
+  return (series as unknown as { latestAtOrBefore: Mock }).latestAtOrBefore;
+}
+
 async function runLabsTab(
   input: Record<string, unknown> = {},
   lastUpdated: string = FRESH_INGEST,
+  series: HeadlineOverrideService = overridesStub(),
 ) {
   const queries: string[] = [];
   const values: unknown[][] = [];
-  const service = new OperationalService(fakeDb(queries, values, lastUpdated));
+  const service = new OperationalService(
+    fakeDb(queries, values, lastUpdated),
+    series,
+  );
   const payload = await service.labsTab(parse(input));
   return { payload, queries, values };
 }
@@ -196,14 +227,16 @@ describe('OperationalService.labsTab', () => {
     expect(payload.charts[0].linelist).toEqual(expected);
     expect(payload.breakdown?.linelist).toEqual(expected);
 
-    expect(
-      payload.breakdown?.rows.map((row) => row.filterValue),
-    ).toEqual(['National Public Health Laboratory', 'KEMRI Nairobi', null]);
+    expect(payload.breakdown?.rows.map((row) => row.filterValue)).toEqual([
+      'National Public Health Laboratory',
+      'KEMRI Nairobi',
+      null,
+    ]);
     expect(payload.breakdown?.rows[2].name).toBe('Not recorded');
 
     const sql = queries.find((text) => text.includes('grouped AS')) ?? '';
     expect(sql).toContain(
-      'count(DISTINCT nullif(testing_laboratory_name, \'\')) = 1',
+      "count(DISTINCT nullif(testing_laboratory_name, '')) = 1",
     );
     expect(sql).toContain('GROUP BY 1\n');
   });
@@ -304,7 +337,9 @@ describe('OperationalService.labsTab', () => {
 
   it('narrows on the laboratory the option list was built from, as a bound value', async () => {
     const absent = await runLabsTab();
-    expect(absent.queries.join('\n')).not.toContain('testing_laboratory_name)) =');
+    expect(absent.queries.join('\n')).not.toContain(
+      'testing_laboratory_name)) =',
+    );
 
     const { queries, values, payload } = await runLabsTab({
       lab: 'National Virology Reference Laboratory (NVRL)',
@@ -415,7 +450,6 @@ const POE_BREAKDOWN_ROWS = [
   },
 ];
 
-
 function fakePoeDb(
   queries: string[],
   values: unknown[][],
@@ -453,18 +487,20 @@ function poeChart(payload: TabPayload, key: string) {
 async function runPoeTab(
   input: Record<string, unknown> = {},
   lastUpdated: string = FRESH_INGEST,
+  series: HeadlineOverrideService = overridesStub(),
 ) {
   const queries: string[] = [];
   const values: unknown[][] = [];
   const service = new OperationalService(
     fakePoeDb(queries, values, lastUpdated),
+    series,
   );
   const payload = await service.poeTab(parse(input));
   return { payload, queries, values };
 }
 
 describe('OperationalService.poeTab', () => {
-  it('carries the screening workload as the tab\'s only card', async () => {
+  it("carries the screening workload as the tab's only card", async () => {
     const { payload, queries } = await runPoeTab();
 
     expect(payload.meta.tab).toBe('poe');
@@ -489,7 +525,9 @@ describe('OperationalService.poeTab', () => {
     const { payload } = await runPoeTab();
 
     expect(
-      payload.cards.some((card) => /contact/i.test(`${card.key} ${card.label}`)),
+      payload.cards.some((card) =>
+        /contact/i.test(`${card.key} ${card.label}`),
+      ),
     ).toBe(false);
     expect(
       payload.breakdown?.columns.some((column) =>
@@ -600,7 +638,9 @@ describe('OperationalService.poeTab', () => {
   });
 
   it('writes no source-system predicate — a single-valued column is a no-op control', async () => {
-    const { queries } = await runPoeTab({ poe: 'Namanga One Stop Border Post' });
+    const { queries } = await runPoeTab({
+      poe: 'Namanga One Stop Border Post',
+    });
     const sql = queries.join('\n');
 
     expect(sql).not.toContain('source_system');
@@ -741,11 +781,13 @@ function fakeHfDb(
 async function runHfTab(
   input: Record<string, unknown> = {},
   summaryOverride: Record<string, unknown> = {},
+  series: HeadlineOverrideService = overridesStub(),
 ) {
   const queries: string[] = [];
   const values: unknown[][] = [];
   const service = new OperationalService(
     fakeHfDb(queries, values, summaryOverride),
+    series,
   );
   const payload = await service.hfTab(parse(input));
   return { payload, queries, values };
@@ -775,7 +817,9 @@ describe('OperationalService.hfTab', () => {
     const { payload } = await runHfTab();
 
     expect(payload.meta.tab).toBe('hf');
-    expect(payload.cards.map((card) => [card.key, card.label, card.value])).toEqual([
+    expect(
+      payload.cards.map((card) => [card.key, card.label, card.value]),
+    ).toEqual([
       ['screened', 'Screened', 16],
       ['alerts', 'Alerts', 0],
       ['confirmed', 'Confirmed', 0],
@@ -783,9 +827,9 @@ describe('OperationalService.hfTab', () => {
       ['recovered', 'Recovered', 0],
       ['deaths', 'Deaths', 0],
     ]);
-    expect(payload.cards.every((card) => card.provenance.source === 'live')).toBe(
-      true,
-    );
+    expect(
+      payload.cards.every((card) => card.provenance.source === 'live'),
+    ).toBe(true);
   });
 
   it('keeps confirmed, current admitted, recovered and deaths as numeric zeroes with concise detail', async () => {
@@ -869,8 +913,12 @@ describe('OperationalService.hfTab', () => {
 
   it('projects every column consumed by the grouped statement', async () => {
     const { queries } = await runHfTab();
-    const sql = queries.find((query) => query.includes('facility_groups AS')) ?? '';
-    const projection = sql.slice(sql.indexOf('WITH base AS ('), sql.indexOf('bounds AS'));
+    const sql =
+      queries.find((query) => query.includes('facility_groups AS')) ?? '';
+    const projection = sql.slice(
+      sql.indexOf('WITH base AS ('),
+      sql.indexOf('bounds AS'),
+    );
 
     for (const column of [
       'reporting_facility_name',
@@ -983,11 +1031,13 @@ function fakeContactDb(
 async function runContactsTab(
   input: Record<string, unknown> = {},
   summaryOverride: Record<string, unknown> = {},
+  series: HeadlineOverrideService = overridesStub(),
 ) {
   const queries: string[] = [];
   const values: unknown[][] = [];
   const service = new OperationalService(
     fakeContactDb(queries, values, summaryOverride),
+    series,
   );
   const payload = await service.contactsTab(parse(input));
   return { payload, queries, values };
@@ -1006,9 +1056,9 @@ describe('OperationalService.contactsTab', () => {
     const { payload } = await runContactsTab();
 
     expect(payload.cards.map((card) => card.key)).toEqual(['contactsListed']);
-    expect(payload.cards.some((card) => card.provenance.source === 'pending')).toBe(
-      false,
-    );
+    expect(
+      payload.cards.some((card) => card.provenance.source === 'pending'),
+    ).toBe(false);
 
     expect(payload.breakdown?.columns.map((column) => column.key)).toEqual([
       'name',
@@ -1034,10 +1084,13 @@ describe('OperationalService.contactsTab', () => {
     ]);
 
     const sql = queries.join('\n');
-    expect(sql).toContain("coalesce(nullif(btrim(reporting_county), ''), 'Not recorded')");
+    expect(sql).toContain(
+      "coalesce(nullif(btrim(reporting_county), ''), 'Not recorded')",
+    );
     expect(sql).not.toContain('grouped_classification');
 
-    const grouped = queries.find((text) => text.includes('grouped_county AS')) ?? '';
+    const grouped =
+      queries.find((text) => text.includes('grouped_county AS')) ?? '';
     const projection = grouped.slice(
       grouped.indexOf('WITH base AS ('),
       grouped.indexOf('bounds AS ('),
@@ -1176,11 +1229,13 @@ function fakeCommunityDb(
 async function runCommunityTab(
   input: Record<string, unknown> = {},
   summaryOverride: Record<string, unknown> = {},
+  series: HeadlineOverrideService = overridesStub(),
 ) {
   const queries: string[] = [];
   const values: unknown[][] = [];
   const service = new OperationalService(
     fakeCommunityDb(queries, values, summaryOverride),
+    series,
   );
   const payload = await service.communityTab(parse(input));
   return { payload, queries, values };
@@ -1263,7 +1318,7 @@ describe('OperationalService.communityTab', () => {
     ]);
   });
 
-  it('binds community source as the tab\'s only value placeholder', async () => {
+  it("binds community source as the tab's only value placeholder", async () => {
     const absent = await runCommunityTab();
     expect(absent.queries.join('\n')).not.toContain(
       'lower(btrim(source_system))',
@@ -1308,7 +1363,10 @@ describe('OperationalService.communityTab', () => {
 
   it('never lets a NaN or an Infinity reach the payload', async () => {
     for (const poisoned of [Number.NaN, Number.POSITIVE_INFINITY, 'NaN']) {
-      const { payload } = await runCommunityTab({}, { verified_share: poisoned });
+      const { payload } = await runCommunityTab(
+        {},
+        { verified_share: poisoned },
+      );
 
       expect(payload.cards[1].value).toBe(203);
       expect(payload.cards[1].detail).not.toMatch(/NaN|Infinity|%/);
@@ -1345,7 +1403,9 @@ describe('OperationalService.communityTab', () => {
     const sql = queries.join('\n');
 
     expect(sql).not.toContain('investigated_signal_count');
-    expect(sql).toContain("coalesce(nullif(btrim(county), ''), 'Not recorded')");
+    expect(sql).toContain(
+      "coalesce(nullif(btrim(county), ''), 'Not recorded')",
+    );
     expect(sql).not.toMatch(/lower\(btrim\(county\)\) = /);
     expect(sql).not.toContain('subcounty');
     expect(sql).not.toContain('community_unit');
@@ -1365,7 +1425,10 @@ describe('OperationalService.communityTab', () => {
   });
 
   it('renders measured numbers over an unrefreshed warehouse', async () => {
-    const { payload } = await runCommunityTab({}, { last_updated: STALE_INGEST });
+    const { payload } = await runCommunityTab(
+      {},
+      { last_updated: STALE_INGEST },
+    );
 
     for (const card of payload.cards) {
       expect(card.meta?.dataQualityStatus).not.toBe('stale');
@@ -1526,10 +1589,12 @@ async function runSummaryTab(
   input: Record<string, unknown> = {},
   overrides: Record<string, Record<string, unknown>> = {},
   facilityRows: Record<string, unknown>[] = SUMMARY_FACILITY_ROWS,
+  series: HeadlineOverrideService = overridesStub(),
 ) {
   const probe: SummaryProbe = { queries: [], values: [], maxInFlight: 0 };
   const service = new OperationalService(
     fakeSummaryDb(probe, overrides, facilityRows),
+    series,
   );
   const payload = await service.summaryTab(parse(input));
   return { payload, ...probe };
@@ -1842,7 +1907,9 @@ describe('OperationalService.summaryTab', () => {
     expect(custom.queries.join('\n')).not.toMatch(/max_event_at - interval/);
     expect(custom.payload.meta.window.anchored).toBe(false);
 
-    const flow = custom.queries.find((sql) => sql.includes('community_daily AS'));
+    const flow = custom.queries.find((sql) =>
+      sql.includes('community_daily AS'),
+    );
     expect(flow?.match(/event_at >= \$2::timestamptz/g)).toHaveLength(2);
     expect(flow?.match(/event_at <= \$3::timestamptz/g)).toHaveLength(2);
   });
@@ -1858,7 +1925,10 @@ describe('OperationalService.summaryTab', () => {
 
       const flow = queries[flowIndex];
       expect(flow.match(/\$2::timestamptz/g), period).toHaveLength(2);
-      expect(values[flowIndex], period).toEqual(['86518-8', SURVEILLANCE_START]);
+      expect(values[flowIndex], period).toEqual([
+        '86518-8',
+        SURVEILLANCE_START,
+      ]);
 
       const facilities = queries.find((sql) =>
         sql.includes('active_facilities AS'),
@@ -1885,9 +1955,12 @@ describe('OperationalService.summaryTab', () => {
   });
 
   it('renders measured numbers over an unrefreshed warehouse', async () => {
-    const { payload } = await runSummaryTab({}, {
-      cases: { last_updated: STALE_INGEST },
-    });
+    const { payload } = await runSummaryTab(
+      {},
+      {
+        cases: { last_updated: STALE_INGEST },
+      },
+    );
 
     for (const card of payload.cards) {
       expect(card.meta?.dataQualityStatus, card.key).not.toBe('stale');
@@ -2040,6 +2113,281 @@ describe('OperationalService.summaryTab', () => {
   });
 });
 
+const OFFICIAL_ROW: HeadlineOverrideRow = {
+  operational_override: true,
+  situation_date: '2026-10-06',
+  report_date: '2026-10-07',
+  source_label: 'CS press release 6 Oct 2026',
+  notes: null,
+  confirmed_cases: 1,
+  confirmed_cases_24h: 1,
+  recoveries: 0,
+  deaths: 1,
+  samples_tested_total: 267,
+  samples_tested_24h: null,
+  positive_samples: 1,
+  negative_samples: 266,
+  travellers_screened_total: 652584,
+  travellers_screened_24h: null,
+  screening_points: null,
+  contacts_listed: 28,
+  updatedBy: null,
+};
+
+const WAREHOUSE_COUNTS = {
+  cases: { confirmed_cases: 5 },
+  outcomes: { recovered: 3, deaths: 4 },
+};
+
+const WAREHOUSE_HEADLINE = {
+  alerts: 75,
+  confirmedCases: 5,
+  currentAdmitted: 0,
+  recovered: 3,
+  deaths: 4,
+  caseFatalityRate: 80,
+};
+
+function summaryCard(payload: TabPayload, key: string) {
+  const card = payload.cards.find((entry) => entry.key === key);
+  if (!card) throw new Error(`No ${key} card on the summary tab`);
+  return card;
+}
+
+function headlineValues(payload: TabPayload) {
+  return {
+    alerts: summaryCard(payload, 'alerts').value,
+    confirmedCases: summaryCard(payload, 'confirmedCases').value,
+    currentAdmitted: summaryCard(payload, 'currentAdmitted').value,
+    recovered: summaryCard(payload, 'recovered').value,
+    deaths: summaryCard(payload, 'deaths').value,
+    caseFatalityRate: summaryCard(payload, 'deaths').breakdown?.[0].value,
+  };
+}
+
+function runHeadlineSummary(
+  series: HeadlineOverrideService,
+  input: Record<string, unknown> = {},
+) {
+  return runSummaryTab(input, WAREHOUSE_COUNTS, SUMMARY_FACILITY_ROWS, series);
+}
+
+function failingOverrides() {
+  return {
+    latestAtOrBefore: vi.fn(() =>
+      Promise.reject(new Error('relation "headline_overrides" does not exist')),
+    ),
+  } as unknown as HeadlineOverrideService;
+}
+
+describe('OperationalService.summaryTab headline override', () => {
+  it.each([false, undefined])(
+    'keeps warehouse figures when operational override is %s',
+    async (operational_override) => {
+      const { payload } = await runHeadlineSummary(
+        overridesStub({ ...OFFICIAL_ROW, operational_override }),
+      );
+      expect(headlineValues(payload)).toEqual(WAREHOUSE_HEADLINE);
+    },
+  );
+
+  it('shows the official confirmed, recoveries and deaths, and derives the fatality rate from them', async () => {
+    const { payload } = await runHeadlineSummary(overridesStub(OFFICIAL_ROW));
+
+    expect(headlineValues(payload)).toEqual({
+      ...WAREHOUSE_HEADLINE,
+      confirmedCases: 1,
+      recovered: 0,
+      deaths: 1,
+      caseFatalityRate: 100,
+    });
+  });
+
+  it.each([
+    ['the default period', {}],
+    ['24h', { period: '24h' }],
+    ['7d', { period: '7d' }],
+    ['42d', { period: '42d' }],
+    ['all', { period: 'all' }],
+  ])(
+    'reads the series once, up to today in Nairobi, for %s',
+    async (_label, input) => {
+      const series = overridesStub(OFFICIAL_ROW);
+      const before = nairobiToday();
+
+      await runHeadlineSummary(series, input);
+
+      expect(seriesRead(series)).toHaveBeenCalledTimes(1);
+      const [periodEnd] = seriesRead(series).mock.calls[0] as [string];
+      expect(periodEnd).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect([before, nairobiToday()]).toContain(periodEnd);
+    },
+  );
+
+  it('reads the series up to the end date of a custom range', async () => {
+    const series = overridesStub(OFFICIAL_ROW);
+
+    await runHeadlineSummary(series, {
+      period: 'custom',
+      from: '2026-09-01',
+      to: '2026-09-30',
+    });
+
+    expect(seriesRead(series)).toHaveBeenCalledTimes(1);
+    expect(seriesRead(series)).toHaveBeenCalledWith('2026-09-30');
+  });
+
+  it.each([
+    ['lab', { lab: 'KEMRI' }],
+    ['poe', { poe: 'JKIA' }],
+    ['facility', { facility: 'KNH' }],
+  ])(
+    'keeps warehouse figures and leaves the series unread under a %s filter',
+    async (_key, input) => {
+      const series = overridesStub(OFFICIAL_ROW);
+
+      const { payload } = await runHeadlineSummary(series, input);
+
+      expect(seriesRead(series)).not.toHaveBeenCalled();
+      expect(headlineValues(payload)).toEqual(WAREHOUSE_HEADLINE);
+    },
+  );
+
+  it.each([
+    [
+      'deaths entered, confirmed and recoveries blank',
+      { confirmed_cases: null, recoveries: null, deaths: 2 },
+      { deaths: 2, caseFatalityRate: 40 },
+    ],
+    [
+      'confirmed entered, recoveries and deaths blank',
+      { confirmed_cases: 8, recoveries: null, deaths: null },
+      { confirmedCases: 8, caseFatalityRate: 50 },
+    ],
+    [
+      'an entered zero for confirmed',
+      { confirmed_cases: 0, recoveries: null, deaths: null },
+      { confirmedCases: 0, caseFatalityRate: null },
+    ],
+  ])(
+    'lets a blank fall through to the warehouse: %s',
+    async (_label, figures, expected) => {
+      const { payload } = await runHeadlineSummary(
+        overridesStub({ ...OFFICIAL_ROW, ...figures }),
+      );
+
+      expect(headlineValues(payload)).toEqual({
+        ...WAREHOUSE_HEADLINE,
+        ...expected,
+      });
+    },
+  );
+
+  it('shows warehouse figures when no row is at or before the period end', async () => {
+    const series = overridesStub(null);
+
+    const { payload } = await runHeadlineSummary(series);
+
+    expect(seriesRead(series)).toHaveBeenCalledTimes(1);
+    expect(headlineValues(payload)).toEqual(WAREHOUSE_HEADLINE);
+  });
+
+  it('answers with warehouse figures and logs once when the series cannot be read', async () => {
+    const probe: SummaryProbe = { queries: [], values: [], maxInFlight: 0 };
+    const service = new OperationalService(
+      fakeSummaryDb(probe, WAREHOUSE_COUNTS),
+      failingOverrides(),
+    );
+    const logger = { error: vi.fn(), warn: vi.fn(), log: vi.fn() };
+    (service as unknown as { logger: typeof logger }).logger = logger;
+
+    const payload = await service.summaryTab(parse({}));
+
+    expect(headlineValues(payload)).toEqual(WAREHOUSE_HEADLINE);
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    const [message] = logger.error.mock.calls[0] as [string, string?];
+    expect(message).toMatch(/^headline override read failed/);
+    expect(message).toContain('headline_overrides');
+  });
+
+  it('changes three card values and the fatality rate, and nothing else in the payload', async () => {
+    const { payload: warehouse } = await runHeadlineSummary(overridesStub());
+    const { payload: merged } = await runHeadlineSummary(
+      overridesStub(OFFICIAL_ROW),
+    );
+
+    const official: Record<string, number> = {
+      confirmedCases: 1,
+      recovered: 0,
+      deaths: 1,
+    };
+    const expected: TabPayload = {
+      ...warehouse,
+      cards: warehouse.cards.map((card) => {
+        if (!(card.key in official)) return card;
+        return {
+          ...card,
+          value: official[card.key],
+          ...(card.breakdown
+            ? { breakdown: [{ ...card.breakdown[0], value: 100 }] }
+            : {}),
+        };
+      }),
+    };
+
+    expect(merged).toEqual(expected);
+  });
+
+  it.each([
+    ['an official row', () => overridesStub(OFFICIAL_ROW)],
+    ['no row', () => overridesStub()],
+    ['a failed read', failingOverrides],
+  ])(
+    'signals nothing about an entered figure with %s',
+    async (_label, make) => {
+      const { payload } = await runHeadlineSummary(make());
+
+      for (const card of payload.cards) {
+        expect('override' in card.provenance, card.key).toBe(false);
+      }
+      for (const [section, provenance] of Object.entries(
+        payload.meta.provenance,
+      )) {
+        expect('override' in provenance, section).toBe(false);
+      }
+
+      const cases = payload.meta.provenance.cases;
+      const outcomes = payload.meta.provenance.outcomes;
+      expect(summaryCard(payload, 'alerts').provenance).toBe(cases);
+      expect(summaryCard(payload, 'confirmedCases').provenance).toBe(cases);
+      expect(summaryCard(payload, 'currentAdmitted').provenance).toBe(outcomes);
+      expect(summaryCard(payload, 'recovered').provenance).toBe(outcomes);
+      expect(summaryCard(payload, 'deaths').provenance).toBe(outcomes);
+      expect(cases).toEqual(source('Source: gold.report_case_investigation'));
+      expect(outcomes).toEqual(source('Source: gold.report_treatment_outcome'));
+    },
+  );
+
+  it('reads the series from no other tab', async () => {
+    const series = overridesStub(OFFICIAL_ROW);
+
+    await runLabsTab({}, FRESH_INGEST, series);
+    await runPoeTab({}, FRESH_INGEST, series);
+    await runHfTab({}, {}, series);
+    await runContactsTab({}, {}, series);
+    await runCommunityTab({}, {}, series);
+
+    expect(seriesRead(series)).not.toHaveBeenCalled();
+  });
+
+  it('never asks the warehouse pool for the series', async () => {
+    const { queries } = await runHeadlineSummary(overridesStub(OFFICIAL_ROW));
+
+    expect(queries).toHaveLength(8);
+    expect(queries.join('\n')).not.toContain('headline_overrides');
+  });
+});
+
 function expectSuppressedDetail(payload: TabPayload, label: string) {
   for (const chart of payload.charts) {
     expect(chart.data, `${label} chart ${chart.key}`).toEqual([]);
@@ -2145,6 +2493,52 @@ describe('earliest / latest', () => {
     expect(earliest(null, '2026-06-02')).toBe('2026-06-02');
     expect(latest('2026-07-08', null)).toBe('2026-07-08');
     expect(earliest(null, null)).toBeNull();
+  });
+});
+
+describe('operational headline period helpers', () => {
+  const lateEvening = new Date('2026-10-06T21:30:00Z');
+
+  it('dates today in Nairobi, three hours ahead of UTC', () => {
+    expect(nairobiToday(new Date('2026-10-06T20:59:59Z'))).toBe('2026-10-06');
+    expect(nairobiToday(new Date('2026-10-06T21:00:00Z'))).toBe('2026-10-07');
+    expect(nairobiToday()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it.each([
+    [{ period: 'custom', to: '2026-09-30 23:59:59.999' }, '2026-09-30'],
+    [{ period: 'custom', to: '2026-09-30T18:00:00Z' }, '2026-09-30'],
+    [{ period: 'custom', to: 'Wed, 30 Sep 2026 22:00:00 GMT' }, '2026-09-30'],
+    [{ period: 'custom', to: 'not a date' }, '2026-10-07'],
+    [{ period: 'custom' }, '2026-10-07'],
+    [{ period: '24h' }, '2026-10-07'],
+    [{ period: '7d' }, '2026-10-07'],
+    [{ period: '21d' }, '2026-10-07'],
+    [{ period: '42d' }, '2026-10-07'],
+    [{ period: 'all' }, '2026-10-07'],
+    [{ period: '21d', to: '2026-09-30 23:59:59.999' }, '2026-10-07'],
+  ])('resolvePeriodEnd(%j) is %s', (filters, expected) => {
+    expect(resolvePeriodEnd(filters, lateEvening)).toBe(expected);
+  });
+
+  it('ends a relative period today when no clock is passed', () => {
+    const before = nairobiToday();
+
+    expect([before, nairobiToday()]).toContain(
+      resolvePeriodEnd({ period: 'all' }),
+    );
+  });
+
+  it.each<[Partial<OperationalFiltersDto>, boolean]>([
+    [{}, false],
+    [{ lab: 'KEMRI' }, true],
+    [{ poe: 'JKIA' }, true],
+    [{ facility: 'KNH' }, true],
+    [{ lab: '' }, false],
+    [{ ageGroup: '18-49' }, false],
+    [{ classification: 'Confirmed', period: '21d' }, false],
+  ])('isGeographicScope(%j) is %s', (filters, expected) => {
+    expect(isGeographicScope(filters)).toBe(expected);
   });
 });
 
@@ -2307,5 +2701,50 @@ describe('operationalFiltersSchema', () => {
 
   it('rejects the preset the meeting removed', () => {
     expect(() => parse({ period: '14d' })).toThrow();
+  });
+});
+
+function poolStub() {
+  return {
+    query: vi.fn(() => Promise.resolve({ rows: [], rowCount: 0 })),
+    end: vi.fn(() => Promise.resolve()),
+  };
+}
+
+describe('OperationalModule', () => {
+  it('compiles with the headline series module and both pools', async () => {
+    const authPool = poolStub();
+    const analyticsPool = poolStub();
+
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        ConfigModule.forRoot({
+          ignoreEnvFile: true,
+          isGlobal: true,
+          load: [envConfig],
+        }),
+        DatabaseModule,
+        OperationalModule,
+      ],
+    })
+      .overrideProvider(AUTH_POSTGRES_POOL)
+      .useValue(authPool)
+      .overrideProvider(ANALYTICS_POSTGRES_POOL)
+      .useValue(analyticsPool)
+      .compile();
+
+    try {
+      expect(moduleRef.get(OperationalService)).toBeInstanceOf(
+        OperationalService,
+      );
+      expect(
+        moduleRef.get(HeadlineOverrideService, { strict: false }),
+      ).toBeInstanceOf(HeadlineOverrideService);
+    } finally {
+      await moduleRef.close();
+    }
+
+    expect(authPool.end).toHaveBeenCalledTimes(1);
+    expect(analyticsPool.end).toHaveBeenCalledTimes(1);
   });
 });

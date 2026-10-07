@@ -106,7 +106,9 @@ describe('AuditService.record', () => {
   });
 
   it('resolves and logs exactly once when the insert rejects', async () => {
-    const query = vi.fn(() => Promise.reject(new Error('relation does not exist')));
+    const query = vi.fn(() =>
+      Promise.reject(new Error('relation does not exist')),
+    );
     const { service, logger } = serviceWith(query);
 
     await expect(service.record(baseEvent)).resolves.toBeUndefined();
@@ -114,7 +116,9 @@ describe('AuditService.record', () => {
   });
 
   it('does not retry, queue or back off when the insert rejects', async () => {
-    const query = vi.fn(() => Promise.reject(new Error('relation does not exist')));
+    const query = vi.fn(() =>
+      Promise.reject(new Error('relation does not exist')),
+    );
     const { service } = serviceWith(query);
 
     await service.record(baseEvent);
@@ -123,7 +127,9 @@ describe('AuditService.record', () => {
   });
 
   it('names the event type in the failure log', async () => {
-    const query = vi.fn(() => Promise.reject(new Error('relation does not exist')));
+    const query = vi.fn(() =>
+      Promise.reject(new Error('relation does not exist')),
+    );
     const { service, logger } = serviceWith(query);
 
     await service.record(baseEvent);
@@ -283,11 +289,16 @@ describe('redactAuditFilters free-text handling', () => {
     const second = redactAuditFilters({ lab: 'NVRL' });
 
     expect(first.labSha256).toBe(second.labSha256);
-    expect(first.labSha256).not.toBe(redactAuditFilters({ lab: 'KEMRI' }).labSha256);
+    expect(first.labSha256).not.toBe(
+      redactAuditFilters({ lab: 'KEMRI' }).labSha256,
+    );
   });
 
   it('keys the digest per filter, so the same text under two filters is distinguishable', () => {
-    const redacted = redactAuditFilters({ lab: 'Wanjiku', facility: 'Wanjiku' });
+    const redacted = redactAuditFilters({
+      lab: 'Wanjiku',
+      facility: 'Wanjiku',
+    });
 
     expect(redacted.labSha256).toBe(redacted.facilitySha256);
     expect(Object.keys(redacted).sort()).toEqual([
@@ -322,7 +333,9 @@ describe('redactAuditFilters free-text handling', () => {
   });
 
   it('cannot be made to leak by a non-string value on a free-text key', () => {
-    expect(redactAuditFilters({ lab: { toString: () => 'Wanjiku' } })).toEqual({});
+    expect(redactAuditFilters({ lab: { toString: () => 'Wanjiku' } })).toEqual(
+      {},
+    );
     expect(redactAuditFilters({ lab: 123 })).toEqual({});
     expect(redactAuditFilters({ lab: '' })).toEqual({});
   });
@@ -454,6 +467,23 @@ describe('AuditService.findAll actor resolution', () => {
     expect(second.total).toBe(3);
   });
 
+  it('excludes reconciliation events from both general audit data and counts', async () => {
+    await seedEvent('access-1', 'acct-1', '2026-10-07T09:00:00Z');
+    await seedEvent('record-1', 'acct-1', '2026-10-07T10:00:00Z');
+    await db.query(
+      `UPDATE audit_events SET "eventType" = 'headline_override' WHERE id = $1`,
+      ['record-1'],
+    );
+    const result = await service.findAll(auditQuerySchema.parse({}));
+    expect(result.data.map((event) => event.id)).toEqual(['access-1']);
+    expect(result.total).toBe(1);
+    const filtered = await service.findAll(
+      auditQuerySchema.parse({ eventType: 'headline_override' }),
+    );
+    expect(filtered.data).toEqual([]);
+    expect(filtered.total).toBe(0);
+  });
+
   it('still filters by actor id after the join', async () => {
     await seedAccount('acct-1', 'Achieng Otieno', 'admin');
     await seedAccount('acct-2', 'Barasa Wekesa', 'surveillance');
@@ -470,8 +500,18 @@ describe('AuditService.findAll actor resolution', () => {
 });
 
 describe('AUDIT_EVENT_TYPES', () => {
-  it('declares the two PII event types this phase emits', () => {
-    expect(AUDIT_EVENT_TYPES).toEqual(['pii_export', 'pii_column_denied']);
+  it('declares the two PII event types and the headline override event type', () => {
+    expect(AUDIT_EVENT_TYPES).toEqual([
+      'pii_export',
+      'pii_column_denied',
+      'headline_override',
+    ]);
+  });
+
+  it('lets the audit query filter on the headline override event type', () => {
+    expect(
+      auditQuerySchema.parse({ eventType: 'headline_override' }).eventType,
+    ).toBe('headline_override');
   });
 });
 

@@ -5,6 +5,7 @@ import { newDb } from 'pg-mem';
 import { Pool } from 'pg';
 
 import { envConfig } from '../config/env.config.js';
+import { HEADLINE_FIGURE_FIELDS } from '../modules/reconciliation/headline-override.schema.js';
 import {
   ANALYTICS_POSTGRES_POOL,
   AUTH_POSTGRES_POOL,
@@ -189,5 +190,171 @@ describe('DatabaseService.ensureSchema audit_events', () => {
     expect(row.rowCount).toBeNull();
     expect(row.actorId).toBeNull();
     expect(row.outcome).toBe('ok');
+  });
+});
+
+describe('DatabaseService.ensureSchema headline_overrides', () => {
+  const HEADLINE_OVERRIDE_COLUMNS = [
+    'situation_date',
+    'report_date',
+    'source_label',
+    'notes',
+    'operational_override',
+    'revision',
+    'record_id',
+    'confirmed_cases',
+    'confirmed_cases_24h',
+    'recoveries',
+    'deaths',
+    'samples_tested_total',
+    'samples_tested_24h',
+    'positive_samples',
+    'negative_samples',
+    'travellers_screened_total',
+    'travellers_screened_24h',
+    'screening_points',
+    'contacts_listed',
+    'updatedBy',
+    'createdAt',
+    'updatedAt',
+  ];
+  const NON_FIGURE_COLUMNS = new Set([
+    'situation_date',
+    'report_date',
+    'source_label',
+    'notes',
+    'operational_override',
+    'revision',
+    'record_id',
+    'updatedBy',
+    'createdAt',
+    'updatedAt',
+  ]);
+
+  interface StoredRow {
+    deaths: number | null;
+    samples_tested_24h: number | null;
+    positive_samples: number | null;
+    contacts_listed: number | null;
+    createdAt: Date | string | null;
+    updatedAt: Date | string | null;
+  }
+
+  let pool: Pool;
+  let db: DatabaseService;
+
+  beforeEach(async () => {
+    const memoryDb = newDb();
+    const adapter = memoryDb.adapters.createPg();
+    pool = new adapter.Pool();
+    db = new DatabaseService(pool);
+    await db.ensureSchema();
+  });
+
+  afterEach(async () => {
+    await pool.end();
+  });
+
+  function insert(row: Record<string, string | number | null>) {
+    const columns = Object.keys(row);
+    const placeholders = columns.map((_, index) => `$${index + 1}`);
+    return db.query(
+      `INSERT INTO headline_overrides (${columns.join(', ')}) VALUES (${placeholders.join(', ')})`,
+      Object.values(row),
+    );
+  }
+
+  async function stored(situationDate: string): Promise<StoredRow> {
+    const read = await db.query<StoredRow>(
+      `SELECT * FROM headline_overrides WHERE situation_date = $1`,
+      [situationDate],
+    );
+    expect(read.rows).toHaveLength(1);
+    return read.rows[0];
+  }
+
+  async function tableColumns(): Promise<string[]> {
+    const result = await db.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'headline_overrides'`,
+    );
+    return result.rows.map((row) => row.column_name);
+  }
+
+  it('materialises headline_overrides with the figure columns and operational toggle', async () => {
+    const columns = await tableColumns();
+
+    expect(HEADLINE_OVERRIDE_COLUMNS).toHaveLength(22);
+    expect(new Set(columns)).toEqual(new Set(HEADLINE_OVERRIDE_COLUMNS));
+    expect(columns).toHaveLength(HEADLINE_OVERRIDE_COLUMNS.length);
+  });
+
+  it('keeps the twelve figure columns equal to HEADLINE_FIGURE_FIELDS as a set', async () => {
+    const figures = new Set<string>(HEADLINE_FIGURE_FIELDS);
+    const isFigure = (column: string) => !NON_FIGURE_COLUMNS.has(column);
+
+    expect(figures.size).toBe(12);
+    expect(new Set(HEADLINE_OVERRIDE_COLUMNS.filter(isFigure))).toEqual(
+      figures,
+    );
+    expect(new Set((await tableColumns()).filter(isFigure))).toEqual(figures);
+  });
+
+  it('round trips the 2026-10-06 official row and stamps createdAt and updatedAt by default', async () => {
+    await insert({
+      situation_date: '2026-10-06',
+      report_date: '2026-10-06',
+      source_label: 'CS press release 6 Oct 2026',
+      confirmed_cases: 1,
+      confirmed_cases_24h: 1,
+      recoveries: 0,
+      deaths: 1,
+      samples_tested_total: 267,
+      samples_tested_24h: null,
+      positive_samples: 1,
+      negative_samples: 266,
+      travellers_screened_total: 652584,
+      travellers_screened_24h: null,
+      screening_points: null,
+      contacts_listed: 28,
+    });
+
+    const row = await stored('2026-10-06');
+    expect(row.positive_samples).toBe(1);
+    expect(row.samples_tested_24h).toBeNull();
+    expect(row.deaths).toBe(1);
+    expect(row.createdAt).toBeTruthy();
+    expect(row.updatedAt).toBeTruthy();
+  });
+
+  it('keeps a reported zero apart from a blank', async () => {
+    await insert({
+      situation_date: '2026-09-27',
+      positive_samples: 0,
+      contacts_listed: null,
+    });
+
+    const row = await stored('2026-09-27');
+    expect(row.positive_samples).toBe(0);
+    expect(row.contacts_listed).toBeNull();
+  });
+
+  it('rejects a second row for the same situation_date', async () => {
+    await insert({ situation_date: '2026-10-06', deaths: 1 });
+
+    await expect(
+      insert({ situation_date: '2026-10-06', deaths: 2 }),
+    ).rejects.toThrow();
+    expect((await stored('2026-10-06')).deaths).toBe(1);
+  });
+
+  it('survives a second ensureSchema with its rows intact (pg-mem rejects a repeated CREATE TABLE IF NOT EXISTS unless its AST coverage check is off)', async () => {
+    await pool.end();
+    pool = new (newDb({ noAstCoverageCheck: true }).adapters.createPg().Pool)();
+    db = new DatabaseService(pool);
+    await db.ensureSchema();
+    await insert({ situation_date: '2026-10-06', deaths: 1 });
+
+    await expect(db.ensureSchema()).resolves.toBeUndefined();
+    expect((await stored('2026-10-06')).deaths).toBe(1);
   });
 });

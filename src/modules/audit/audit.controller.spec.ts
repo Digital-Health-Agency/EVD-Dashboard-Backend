@@ -39,7 +39,9 @@ describe('auditQuerySchema', () => {
   });
 
   it('accepts an actorId and rejects one beyond the length bound', () => {
-    expect(auditQuerySchema.parse({ actorId: 'user-1' }).actorId).toBe('user-1');
+    expect(auditQuerySchema.parse({ actorId: 'user-1' }).actorId).toBe(
+      'user-1',
+    );
     expect(() =>
       auditQuerySchema.parse({ actorId: 'x'.repeat(121) }),
     ).toThrow();
@@ -125,14 +127,16 @@ describe('AuditService.findAll', () => {
     expect(rowSql).not.toContain('u.*');
   });
 
-  it('issues no WHERE clause when no filters are supplied', async () => {
+  it('excludes reconciliation history when no filters are supplied', async () => {
     const query = pagedResult([], '0');
     const service = serviceWith(query);
 
     await service.findAll(auditQuerySchema.parse({}));
 
     for (const call of query.mock.calls) {
-      expect(call[0] as string).not.toContain('WHERE');
+      expect(call[0] as string).toContain(
+        `e."eventType" <> 'headline_override'`,
+      );
     }
   });
 
@@ -141,7 +145,11 @@ describe('AuditService.findAll', () => {
     const service = serviceWith(query);
 
     await service.findAll(
-      auditQuerySchema.parse({ eventType: 'pii_export', page: '1', limit: '20' }),
+      auditQuerySchema.parse({
+        eventType: 'pii_export',
+        page: '1',
+        limit: '20',
+      }),
     );
 
     const rowSql = query.mock.calls
@@ -186,9 +194,9 @@ describe('AuditService.findAll', () => {
     const query = vi.fn(() => Promise.reject(new Error('connection lost')));
     const service = serviceWith(query);
 
-    await expect(
-      service.findAll(auditQuerySchema.parse({})),
-    ).rejects.toThrow('connection lost');
+    await expect(service.findAll(auditQuerySchema.parse({}))).rejects.toThrow(
+      'connection lost',
+    );
   });
 });
 
@@ -220,6 +228,8 @@ describe('AuditController', () => {
   });
 
   it('carries no public-route metadata on the controller', () => {
-    expect(Reflect.getMetadata(PUBLIC_ROUTE_KEY, AuditController)).toBeUndefined();
+    expect(
+      Reflect.getMetadata(PUBLIC_ROUTE_KEY, AuditController),
+    ).toBeUndefined();
   });
 });

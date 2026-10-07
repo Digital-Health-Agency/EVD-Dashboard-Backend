@@ -1,6 +1,13 @@
-export const AUTH_ROLES = ['user', 'admin', 'surveillance'] as const;
+export const AUTH_ROLES = [
+  'user',
+  'admin',
+  'surveillance',
+  'reconciliation',
+] as const;
 
 export const SURVEILLANCE_ROLE = 'surveillance';
+
+export const RECONCILIATION_ROLE = 'reconciliation';
 
 export type AuthRoleName = (typeof AUTH_ROLES)[number];
 

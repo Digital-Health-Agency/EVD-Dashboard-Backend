@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { QueryResultRow } from 'pg';
 
 import {
@@ -14,6 +14,7 @@ import {
   stringValue,
   type Provenance,
 } from '../../common/analytics-helpers.js';
+import { nairobiToday } from '../../common/nairobi-date.js';
 import {
   activeSurveillanceEvent,
   clampToSurveillanceStart,
@@ -21,6 +22,9 @@ import {
   resolveSurveillanceStartDate,
   surveillanceFloorPredicate,
 } from '../../common/surveillance-event.js';
+import { overrideValue } from '../reconciliation/headline-override-merge.js';
+import type { HeadlineOverrideRow } from '../reconciliation/headline-override.schema.js';
+import { HeadlineOverrideService } from '../reconciliation/headline-override.service.js';
 import {
   catalogEntry,
   catalogSources,
@@ -229,6 +233,35 @@ export function latest(a: string | null, b: string | null): string | null {
   return a >= b ? a : b;
 }
 
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+export { nairobiToday };
+
+export function resolvePeriodEnd(
+  filters: { period: string; to?: string },
+  now: Date = new Date(),
+): string {
+  if (filters.period !== 'custom' || !filters.to) return nairobiToday(now);
+
+  const day = filters.to.slice(0, 10);
+  if (DATE_ONLY.test(day)) return day;
+
+  const parsed = Date.parse(filters.to);
+  return Number.isNaN(parsed)
+    ? nairobiToday(now)
+    : new Date(parsed).toISOString().slice(0, 10);
+}
+
+export function isGeographicScope(filters: {
+  lab?: string;
+  poe?: string;
+  facility?: string;
+}): boolean {
+  return [filters.lab, filters.poe, filters.facility].some(
+    (value) => typeof value === 'string' && value.length > 0,
+  );
+}
+
 interface ScopedQuery {
   sql: string;
   params: unknown[];
@@ -237,8 +270,11 @@ interface ScopedQuery {
 
 @Injectable()
 export class OperationalService {
+  private readonly logger = new Logger(OperationalService.name);
+
   constructor(
     @Inject(ANALYTICS_POSTGRES_POOL) private readonly analyticsDb: Queryable,
+    private readonly overrides: HeadlineOverrideService,
   ) {}
 
   async labsTab(filters: OperationalFiltersDto): Promise<TabPayload> {
@@ -734,7 +770,10 @@ export class OperationalService {
         value: summary.signalsReported,
         detail: 'Community signals reported in the selected period',
         provenance,
-        meta: withRuntimeMeta(catalogEntry('community.signalsReported'), runtime),
+        meta: withRuntimeMeta(
+          catalogEntry('community.signalsReported'),
+          runtime,
+        ),
       }),
       buildCard({
         key: 'signalsVerified',
@@ -747,7 +786,10 @@ export class OperationalService {
             ? `of ${summary.signalsReported} signals reported`
             : 'No signal reported in the selected period',
         provenance,
-        meta: withRuntimeMeta(catalogEntry('community.signalsVerified'), runtime),
+        meta: withRuntimeMeta(
+          catalogEntry('community.signalsVerified'),
+          runtime,
+        ),
       }),
     ];
 
@@ -759,7 +801,9 @@ export class OperationalService {
       orientation: 'vertical',
       height: 300,
       categoryKey: 'name',
-      series: [{ key: 'verified', label: 'Verified signals', color: '#1f7a4d' }],
+      series: [
+        { key: 'verified', label: 'Verified signals', color: '#1f7a4d' },
+      ],
       data: groups.rows.slice(0, CHART_LIMIT).map((row) => ({
         name: row.name,
         verified: row.verified,
@@ -876,10 +920,32 @@ export class OperationalService {
     );
     const verifiedIsDefined = communityAgg.verifiedShare !== null;
 
+    let entered: HeadlineOverrideRow | null = null;
+    if (!isGeographicScope(filters)) {
+      try {
+        entered = await this.overrides.latestAtOrBefore(
+          resolvePeriodEnd(filters),
+        );
+        if (entered?.operational_override !== true) entered = null;
+      } catch (error: unknown) {
+        const failure =
+          error instanceof Error ? error : new Error(String(error));
+        this.logger.error(
+          `headline override read failed: ${failure.message}`,
+          failure.stack,
+        );
+      }
+    }
+
+    const confirmed = overrideValue(
+      entered?.confirmed_cases,
+      caseAgg.confirmedCases,
+    );
+    const recovered = overrideValue(entered?.recoveries, outcomeAgg.recovered);
+    const deaths = overrideValue(entered?.deaths, outcomeAgg.deaths);
+
     const cfr =
-      caseAgg.confirmedCases > 0
-        ? Math.round((outcomeAgg.deaths / caseAgg.confirmedCases) * 1000) / 10
-        : null;
+      confirmed > 0 ? Math.round((deaths / confirmed) * 1000) / 10 : null;
 
     const cards: TabCard[] = [
       buildCard({
@@ -897,7 +963,7 @@ export class OperationalService {
         label: 'Confirmed cases',
         tone: 'red',
         emphasis: 'important',
-        value: caseAgg.confirmedCases,
+        value: confirmed,
         detail: 'Case investigations finally classified confirmed',
         provenance: caseProvenance,
         meta: withRuntimeMeta(catalogEntry('summary.confirmedCases'), runtime),
@@ -917,7 +983,7 @@ export class OperationalService {
         label: 'Recoveries',
         tone: 'green',
         emphasis: 'important',
-        value: outcomeAgg.recovered,
+        value: recovered,
         detail: 'Treatment outcomes recorded as recovered',
         provenance: outcomeProvenance,
         meta: withRuntimeMeta(catalogEntry('summary.recovered'), runtime),
@@ -927,7 +993,7 @@ export class OperationalService {
         label: 'Deaths',
         tone: 'navy',
         emphasis: 'important',
-        value: outcomeAgg.deaths,
+        value: deaths,
         detail: null,
         breakdown: [
           {
