@@ -656,17 +656,18 @@ describe.each(DATASETS)(
 );
 
 describe('LinelistService window resolution', () => {
-  it('anchors a preset to the table max and issues a bounds sub-select', async () => {
+  it('anchors a preset to now and issues a bounds sub-select', async () => {
     const { service, calls } = harness();
     await service.signals(parse({ period: '7d' }));
 
     const row = rowStatement(calls);
     expect(row.sql).toContain('bounds AS (');
-    expect(row.sql).toContain('max(event_at) AS max_event_at');
+    // Preset periods count back from now, not from the newest record.
+    expect(row.sql).toContain('now() AS max_event_at');
     expect(row.sql).toContain(
       "event_at > bounds.max_event_at - interval '7 days' AND event_at >= $1::timestamptz",
     );
-    expect(row.sql).not.toContain('now()');
+    expect(row.sql).not.toContain('max(event_at) AS max_event_at');
     expect(row.values).toEqual([SURVEILLANCE_START, 50, 0]);
   });
 
@@ -681,7 +682,7 @@ describe('LinelistService window resolution', () => {
       );
       expect(row.values?.[0], period).toBe(SURVEILLANCE_START);
       expect(row.sql, period).not.toContain('greatest(');
-      expect(row.sql, period).not.toContain('now()');
+      expect(row.sql, period).toContain('now() AS max_event_at');
     }
   });
 
@@ -819,7 +820,7 @@ describe('LinelistService EVD scope', () => {
     expect(baseEnd).toBeGreaterThan(-1);
 
     expect(sql.slice(0, baseEnd)).toContain('test_code = $1');
-    expect(sql).toContain('max(event_at) AS max_event_at');
+    expect(sql).toContain('now() AS max_event_at');
   });
 
   it('projects test_code in the base CTE so the predicate has a column to read', async () => {

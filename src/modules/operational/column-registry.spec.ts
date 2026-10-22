@@ -85,7 +85,7 @@ function firstPiiKey(registry: DatasetRegistry): string {
 }
 
 describe('linelist display column contract', () => {
-  it('labels all 77 distinct registry identifiers with human text', async () => {
+  it('labels all 81 distinct registry identifiers with human text', async () => {
     const modulePath = './column-labels.js';
     const labels = (await import(modulePath)) as {
       COLUMN_LABELS: Readonly<Record<string, string>>;
@@ -99,7 +99,7 @@ describe('linelist display column contract', () => {
       ),
     ];
 
-    expect(Object.keys(labels.COLUMN_LABELS)).toHaveLength(77);
+    expect(Object.keys(labels.COLUMN_LABELS)).toHaveLength(81);
     for (const identifier of identifiers) {
       expect(labels.labelFor(identifier).trim()).not.toBe('');
       if (identifier.includes('_')) {

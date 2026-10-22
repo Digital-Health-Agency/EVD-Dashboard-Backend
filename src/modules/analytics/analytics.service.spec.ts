@@ -79,7 +79,7 @@ function goldDb() {
         !sql.includes(') updates')
       ) {
         expect(sql).toContain('test_code = $1');
-        expect(values).toEqual(['86518-8', SURVEILLANCE_START]);
+        expect(values?.slice(0, 2)).toEqual(['86518-8', SURVEILLANCE_START]);
       }
 
       if (sql.includes('max(updated_at)') && sql.includes(') updates')) {
@@ -104,6 +104,8 @@ function goldDb() {
             first_test: '2025-09-05',
             last_test: '2026-07-16',
             tests_24h: 1,
+            patients_24h: 1,
+            patients_positive: 0,
           },
         ]);
       }
@@ -136,7 +138,24 @@ function goldDb() {
             deaths_24h: 0,
             recoveries_24h: 0,
             contacts_listed: 59,
+            contacts_24h: 3,
             case_24h_window_end: '2026-07-10T13:24:13',
+          },
+        ]);
+      }
+      if (sql.includes('case_daily') && sql.includes('generate_series')) {
+        return rows([
+          {
+            date: '2026-07-15',
+            cases: 1,
+            confirmed: 0,
+            deaths: 0,
+            recoveries: 2,
+            tests: 4,
+            positive: 1,
+            people: 3,
+            people_positive: 1,
+            contacts: 3,
           },
         ]);
       }
@@ -240,9 +259,34 @@ describe('AnalyticsService', () => {
     expect(payload.labs.patientsTested).toBe(159);
     expect(payload.labs.avgTatDays).toBe(149.3);
     expect(payload.labs.newTested24h).toBe(1);
+    expect(payload.labs.newPatientsTested24h).toBe(1);
+    expect(payload.labs.patientsPositive).toBe(0);
     expect(payload.labs.pendingResults).toBe(0);
     expect(payload.cases.totalCases).toBe(74);
     expect(payload.cases.contactsListed).toBe(59);
+    expect(payload.cases.newContacts24h).toBe(3);
+    expect(payload.cases.daily).toEqual([
+      {
+        date: '2026-07-15',
+        cases: 1,
+        confirmed: 0,
+        deaths: 0,
+        recoveries: 2,
+        contacts: 3,
+      },
+    ]);
+    expect(payload.labs.daily).toEqual([
+      {
+        date: '2026-07-15',
+        tests: 4,
+        positive: 1,
+        people: 3,
+        peoplePositive: 1,
+      },
+    ]);
+    const daily = calls.find((call) => call.sql.includes('case_daily'));
+    expect(daily?.sql).toContain("AT TIME ZONE 'Africa/Nairobi'");
+    expect(daily?.values?.[2]).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(payload.cases.newCases24h).toBe(1);
     expect(payload.cases.admitted).toBeNull();
     expect(payload.poe.totalScreened).toBe(117687);
@@ -275,7 +319,7 @@ describe('AnalyticsService', () => {
     expect(freshness?.values).toEqual(['86518-8']);
   });
 
-  it('floors the 24-hour deltas by flooring the rows they are taken over', async () => {
+  it('counts the 24-hour deltas back from now, passed in, over floored rows', async () => {
     const calls: Call[] = [];
     const db: Queryable = {
       query: vi.fn((sql: string, values?: unknown[]) => {
@@ -284,17 +328,43 @@ describe('AnalyticsService', () => {
       }),
     };
 
+    const before = Date.now();
     await new AnalyticsService(db, overridesStub()).getMetrics();
+    const after = Date.now();
 
     const deltas = calls.filter((call) =>
       call.sql.includes("interval '24 hours'"),
     );
-    expect(deltas.length).toBeGreaterThan(0);
+    expect(deltas.length).toBe(3);
     for (const call of deltas) {
-      expect(call.sql).toContain('max_event_at');
+      expect(call.sql).not.toContain('max_event_at');
       expect(call.sql).not.toContain('now()');
       expect(call.sql).toMatch(/>= \$\d+::timestamptz/);
       expect(call.values).toContain(SURVEILLANCE_START);
+
+      const end = call.values?.find(
+        (value) =>
+          typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value),
+      );
+      expect(end, call.sql.slice(0, 80)).toBeDefined();
+      const at = Date.parse(end as string);
+      expect(at).toBeGreaterThanOrEqual(before);
+      expect(at).toBeLessThanOrEqual(after);
+    }
+  });
+
+  it('counts only point-of-entry traveller screenings on the public figures', async () => {
+    const { db, calls } = goldDb();
+    await new AnalyticsService(db, overridesStub()).getMetrics();
+
+    const screening = calls.filter(
+      (call) =>
+        call.sql.includes('FROM gold.report_screening') &&
+        !call.sql.includes(') updates'),
+    );
+    expect(screening.length).toBe(3);
+    for (const call of screening) {
+      expect(call.sql).toContain("surveillance_pathway = 'TRAVELLER'");
     }
   });
 

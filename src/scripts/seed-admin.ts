@@ -59,26 +59,28 @@ function askHidden(question: string): Promise<string> {
     process.stdin.resume();
     process.stdin.setEncoding('utf8');
 
-    const onData = (ch: string) => {
-      const c = ch.toString();
-
-      if (c === '\n' || c === '\r' || c === '\u0004') {
-        process.stdin.setRawMode(false);
-        process.stdin.pause();
-        process.stdin.removeListener('data', onData);
-        process.stdout.write('\n');
-        resolve(chars.join(''));
-      } else if (c === '\u0003') {
-        process.stdout.write('\n');
-        process.exit(1);
-      } else if (c === '\u007f' || c === '\b') {
-        if (chars.length > 0) {
-          chars.pop();
-          process.stdout.write('\b \b');
+    // A pasted password arrives as one chunk, so handle it character by character.
+    const onData = (chunk: string) => {
+      for (const c of chunk.toString()) {
+        if (c === '\n' || c === '\r' || c === '\u0004') {
+          process.stdin.setRawMode(false);
+          process.stdin.pause();
+          process.stdin.removeListener('data', onData);
+          process.stdout.write('\n');
+          resolve(chars.join(''));
+          return;
+        } else if (c === '\u0003') {
+          process.stdout.write('\n');
+          process.exit(1);
+        } else if (c === '\u007f' || c === '\b') {
+          if (chars.length > 0) {
+            chars.pop();
+            process.stdout.write('\b \b');
+          }
+        } else {
+          chars.push(c);
+          process.stdout.write('*');
         }
-      } else {
-        chars.push(c);
-        process.stdout.write('*');
       }
     };
 

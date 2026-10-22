@@ -1,3 +1,4 @@
+import { presetWindowDates } from '../../common/analytics-helpers.js';
 import { Logger } from '@nestjs/common';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -211,10 +212,8 @@ describe('LinelistExportService parity', () => {
     const presetResult = await preset.service.screenings(
       linelistExportQuerySchema.parse({ period: '21d' }),
     );
-    expect(presetResult.window).toEqual({
-      from: '2026-07-07',
-      to: '2026-07-28',
-    });
+    // Preset periods end today in Nairobi, with no newest-record lookup.
+    expect(presetResult.window).toEqual(presetWindowDates('21d'));
     await collect(presetResult.rows);
 
     const custom = exportHarness();
@@ -286,7 +285,20 @@ describe('LinelistExportService parity', () => {
     );
     await collect(result.rows);
 
-    const bounds = calls.find((call) => /SELECT\s+to_char\(/.test(call.sql));
+    // Only an all-time export looks up its date span; presets end today.
+    const allTime = exportHarness();
+    const allTimeResult = await allTime.service.screenings(
+      linelistExportQuerySchema.parse({
+        period: 'all',
+        screeningScope: 'facility',
+        screeningFlagged: 'true',
+        facility: 'Suba Sub County Hospital',
+      }),
+    );
+    await collect(allTimeResult.rows);
+    const bounds = allTime.calls.find((call) =>
+      /SELECT\s+to_char\(/.test(call.sql),
+    );
     expect(bounds?.sql).toContain('WHERE source_system = $1');
     expect(bounds?.values?.[0]).toBe('TAIFACARE_KENYAEMR');
 
@@ -439,7 +451,6 @@ describe('LinelistExportService served pii columns', () => {
 
     expect(calls.map((call) => kindOf(call.sql))).toEqual([
       'begin',
-      'bounds',
       'declare',
       'fetch',
       'fetch',
