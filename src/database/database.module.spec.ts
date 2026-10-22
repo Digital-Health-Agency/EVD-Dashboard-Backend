@@ -8,6 +8,8 @@ import { envConfig } from '../config/env.config.js';
 import { HEADLINE_FIGURE_FIELDS } from '../modules/reconciliation/headline-override.schema.js';
 import {
   ANALYTICS_POSTGRES_POOL,
+  ANALYTICS_SESSION_TIME_ZONE,
+  analyticsTypeParsers,
   AUTH_POSTGRES_POOL,
   DatabaseModule,
   DatabaseService,
@@ -87,6 +89,29 @@ function toArray(value: string[] | string): string[] {
 function toObject(value: Record<string, unknown> | string): unknown {
   return typeof value === 'string' ? JSON.parse(value) : value;
 }
+
+describe('analytics connection', () => {
+  it('reads DATE columns as their calendar text, not a shifted instant', () => {
+    const parseDate = analyticsTypeParsers.getTypeParser(1082, 'text') as (
+      value: string,
+    ) => unknown;
+    expect(parseDate('2026-10-20')).toBe('2026-10-20');
+  });
+
+  it('still parses timestamps into instants', () => {
+    const parseTimestamptz = analyticsTypeParsers.getTypeParser(
+      1184,
+      'text',
+    ) as (value: string) => unknown;
+    const parsed = parseTimestamptz('2026-10-20 00:00:00+03');
+    expect(parsed).toBeInstanceOf(Date);
+    expect((parsed as Date).toISOString()).toBe('2026-10-19T21:00:00.000Z');
+  });
+
+  it('runs its session on Kenyan time', () => {
+    expect(ANALYTICS_SESSION_TIME_ZONE).toBe('Africa/Nairobi');
+  });
+});
 
 describe('DatabaseService.ensureSchema audit_events', () => {
   const AUDIT_EVENT_COLUMNS = [

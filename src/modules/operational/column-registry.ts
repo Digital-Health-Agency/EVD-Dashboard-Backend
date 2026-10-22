@@ -69,11 +69,18 @@ export const LAB_RESULT_COLUMNS = Object.freeze({
     byDefault: true,
     searchable: true,
   },
+  reporting_requesting_facility_name: {
+    column: 'reporting_requesting_facility_name',
+    exposure: 'public',
+    sortable: true,
+    byDefault: true,
+    searchable: true,
+  },
   reporting_requesting_facility_mfl: {
     column: 'reporting_requesting_facility_mfl',
     exposure: 'public',
     sortable: true,
-    byDefault: true,
+    byDefault: false,
     searchable: false,
   },
   turnaround_time_days: {
@@ -353,6 +360,20 @@ export const CASE_INVESTIGATION_COLUMNS = Object.freeze({
     searchable: false,
   },
 
+  case_record_origin: {
+    column: 'case_record_origin',
+    exposure: 'authenticated',
+    sortable: true,
+    byDefault: true,
+    searchable: false,
+  },
+  duplicate_lab_case_flag: {
+    column: 'duplicate_lab_case_flag',
+    exposure: 'authenticated',
+    sortable: true,
+    byDefault: true,
+    searchable: false,
+  },
   investigation_date: {
     column: 'investigation_date',
     exposure: 'public',

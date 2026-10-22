@@ -13,7 +13,11 @@ import {
   DatabaseModule,
   type Queryable,
 } from '../../database/database.module.js';
-import { pending, source } from '../../common/analytics-helpers.js';
+import {
+  presetWindowDates,
+  pending,
+  source,
+} from '../../common/analytics-helpers.js';
 import type { HeadlineOverrideRow } from '../reconciliation/headline-override.schema.js';
 import { HeadlineOverrideService } from '../reconciliation/headline-override.service.js';
 import { OperationalModule } from './operational.module.js';
@@ -253,7 +257,9 @@ describe('OperationalService.labsTab', () => {
     expect(queries.join('\n')).toContain(
       "bounds.max_event_at - interval '42 days'",
     );
-    expect(queries.join('\n')).not.toContain('now()');
+    // Preset periods count back from now, not from the newest record.
+    expect(queries.join('\n')).toContain('now() AS max_event_at');
+    expect(queries.join('\n')).not.toContain('max(event_at) AS max_event_at');
     expect(payload.meta.window.anchored).toBe(true);
     expect(payload.meta.window.period).toBe('42d');
     expect(values[0]).toEqual(['86518-8', SURVEILLANCE_START]);
@@ -276,7 +282,6 @@ describe('OperationalService.labsTab', () => {
     expect(sql).toContain('event_at >= $2::timestamptz');
     expect(sql).not.toContain('interval');
     expect(sql).not.toContain('undefined');
-    expect(sql).not.toContain('now()');
 
     expect(payload.meta.window.anchored).toBe(false);
     expect(payload.meta.window.period).toBe('all');
@@ -662,7 +667,7 @@ describe('OperationalService.poeTab', () => {
     expect(sql).toContain('gold.report_screening');
     expect(sql).toContain('screening_datetime');
     expect(sql).toContain("bounds.max_event_at - interval '7 days'");
-    expect(sql).not.toContain('now()');
+    expect(sql).toContain('now() AS max_event_at');
     expect(sql).not.toMatch(/\b(bronze|silver)\./);
     expect(sql).not.toMatch(/\bmarts\./);
     expect(sql).not.toMatch(/SELECT\s+\*/);
@@ -868,7 +873,7 @@ describe('OperationalService.hfTab', () => {
         sql.indexOf('bounds AS'),
       );
       expect(sql).toContain("bounds.max_event_at - interval '21 days'");
-      expect(sql).not.toContain('now()');
+      expect(sql).toContain('now() AS max_event_at');
     }
     expect(payload.meta.window.anchored).toBe(true);
   });
@@ -1144,7 +1149,7 @@ describe('OperationalService.contactsTab', () => {
     expect(sql).toContain('registration_date::timestamptz');
     expect(sql).not.toContain('reporting_date');
     expect(sql).toContain("bounds.max_event_at - interval '42 days'");
-    expect(sql).not.toContain('now()');
+    expect(sql).toContain('now() AS max_event_at');
     expect(payload.meta.window.anchored).toBe(true);
   });
 
@@ -1380,7 +1385,7 @@ describe('OperationalService.communityTab', () => {
 
     expect(presetSql).toContain('gold.report_community_signals');
     expect(presetSql).toContain("bounds.max_event_at - interval '7 days'");
-    expect(presetSql).not.toContain('now()');
+    expect(presetSql).toContain('now() AS max_event_at');
     expect(preset.payload.meta.window.anchored).toBe(true);
 
     const custom = await runCommunityTab({
@@ -1601,14 +1606,13 @@ async function runSummaryTab(
 }
 
 describe('OperationalService.summaryTab', () => {
-  it('carries exactly the five Section 7 cards, in order, all important', async () => {
+  it('carries exactly the four Section 7 cards, in order, all important', async () => {
     const { payload } = await runSummaryTab();
 
     expect(payload.meta.tab).toBe('summary');
     expect(payload.cards.map((card) => card.key)).toEqual([
       'alerts',
       'confirmedCases',
-      'currentAdmitted',
       'recovered',
       'deaths',
     ]);
@@ -1660,31 +1664,18 @@ describe('OperationalService.summaryTab', () => {
     }
   });
 
-  it('fixes current admitted at zero with a detail saying so, and still does not derive it', async () => {
-    const { payload } = await runSummaryTab();
+  it('carries no current admitted card: no gold mart records admissions', async () => {
+    const { payload } = await runSummaryTab(
+      {},
+      { outcomes: { on_treatment: 9 } },
+    );
 
     expect(
       payload.cards.filter((card) => card.provenance.source === 'pending'),
     ).toEqual([]);
-
-    const admitted = payload.cards.find(
-      (card) => card.key === 'currentAdmitted',
-    );
-
-    expect(admitted?.label).toBe('Current admitted');
-    expect(admitted?.value).toBe(0);
-    expect(admitted?.detail).toBe(
-      'Confirmed or probable cases currently admitted',
-    );
-    expect(admitted?.meta?.dataQualityStatus).not.toBe('unavailable');
-
-    const { payload: derived } = await runSummaryTab(
-      {},
-      { outcomes: { on_treatment: 9 } },
-    );
     expect(
-      derived.cards.find((card) => card.key === 'currentAdmitted')?.value,
-    ).toBe(0);
+      payload.cards.find((card) => card.key === 'currentAdmitted'),
+    ).toBeUndefined();
   });
 
   it('hangs the case fatality rate under the deaths count, as deaths over confirmed to one decimal', async () => {
@@ -1748,7 +1739,7 @@ describe('OperationalService.summaryTab', () => {
     }
   });
 
-  it('renders the Section 7.1 facility table with its six columns in order', async () => {
+  it('renders the Section 7.1 facility table with its five columns in order', async () => {
     const { payload } = await runSummaryTab();
     const breakdown = payload.breakdown;
 
@@ -1770,14 +1761,13 @@ describe('OperationalService.summaryTab', () => {
       ['name', 'Facility', 'text', false],
       ['alerts', 'Alerts', 'num', false],
       ['confirmed', 'Confirmed', 'num', false],
-      ['currentAdmitted', 'Current admitted', 'num', true],
       ['recovered', 'Recovered', 'num', false],
       ['deaths', 'Deaths', 'num', false],
     ]);
 
     expect(breakdown?.rows.length).toBeGreaterThan(0);
     for (const row of breakdown?.rows ?? []) {
-      expect(row.currentAdmitted, String(row.name)).toBeNull();
+      expect('currentAdmitted' in row, String(row.name)).toBe(false);
       expect(row.unrecorded, String(row.name)).toBeUndefined();
     }
 
@@ -1896,7 +1886,7 @@ describe('OperationalService.summaryTab', () => {
       "community_bounds.max_event_at - interval '42 days'",
     );
     expect(presetSql).toContain("lab_bounds.max_event_at - interval '42 days'");
-    expect(presetSql).not.toContain('now()');
+    expect(presetSql).not.toContain('max(event_at) AS max_event_at');
     expect(preset.payload.meta.window.anchored).toBe(true);
 
     const custom = await runSummaryTab({
@@ -1937,10 +1927,20 @@ describe('OperationalService.summaryTab', () => {
     }
   });
 
+  it('reports a preset window as today back the period, in Nairobi dates', async () => {
+    const { payload } = await runSummaryTab({ period: '21d' });
+
+    expect(payload.meta.window).toEqual({
+      period: '21d',
+      ...presetWindowDates('21d'),
+      anchored: true,
+    });
+  });
+
   it('reports the widest window and the oldest ingestion across the six marts', async () => {
     const older = '2026-07-20T10:00:00Z';
     const { payload } = await runSummaryTab(
-      {},
+      { period: 'all' },
       { contacts: { last_updated: older } },
     );
 
@@ -2142,7 +2142,6 @@ const WAREHOUSE_COUNTS = {
 const WAREHOUSE_HEADLINE = {
   alerts: 75,
   confirmedCases: 5,
-  currentAdmitted: 0,
   recovered: 3,
   deaths: 4,
   caseFatalityRate: 80,
@@ -2158,7 +2157,6 @@ function headlineValues(payload: TabPayload) {
   return {
     alerts: summaryCard(payload, 'alerts').value,
     confirmedCases: summaryCard(payload, 'confirmedCases').value,
-    currentAdmitted: summaryCard(payload, 'currentAdmitted').value,
     recovered: summaryCard(payload, 'recovered').value,
     deaths: summaryCard(payload, 'deaths').value,
     caseFatalityRate: summaryCard(payload, 'deaths').breakdown?.[0].value,
@@ -2360,7 +2358,6 @@ describe('OperationalService.summaryTab headline override', () => {
       const outcomes = payload.meta.provenance.outcomes;
       expect(summaryCard(payload, 'alerts').provenance).toBe(cases);
       expect(summaryCard(payload, 'confirmedCases').provenance).toBe(cases);
-      expect(summaryCard(payload, 'currentAdmitted').provenance).toBe(outcomes);
       expect(summaryCard(payload, 'recovered').provenance).toBe(outcomes);
       expect(summaryCard(payload, 'deaths').provenance).toBe(outcomes);
       expect(cases).toEqual(source('Source: gold.report_case_investigation'));

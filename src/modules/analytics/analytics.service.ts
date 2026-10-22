@@ -40,6 +40,28 @@ const OUTCOME_EVENT_AT = `coalesce(
         )`;
 const SCREENING_EVENT_AT = `coalesce(screening_datetime, reporting_date::timestamptz)`;
 const CONTACT_EVENT_AT = `coalesce(registration_datetime, registration_date::timestamptz)`;
+// Public screening figures are point-of-entry traveller screenings only;
+// facility screenings (Taifa Care / KenyaEMR) are a different pathway.
+const POE_PATHWAY = `surveillance_pathway = 'TRAVELLER'`;
+const LAB_EVENT_AT = `coalesce(
+          result_datetime,
+          reporting_result_date::timestamptz,
+          collection_date::timestamptz
+        )`;
+// The person behind a lab result, for people-tested counts. Matches the
+// warehouse's LIMS case key (lims_link_key: case identifier with whitespace
+// removed); a result with no case identifier counts on its own.
+const LAB_PERSON_KEY = `coalesce(
+          nullif(regexp_replace(case_identifier, '\\s', '', 'g'), ''),
+          'specimen:' || nullif(btrim(specimen_identifier), ''),
+          'record:' || source_record_id::text
+        )`;
+
+// The "last 24 hours" figures count back from now, not from the newest record
+// in each source, so a source that has gone quiet reports zero.
+function windowEnd(): string {
+  return new Date().toISOString();
+}
 
 @Injectable()
 export class AnalyticsService {
@@ -57,6 +79,7 @@ export class AnalyticsService {
       labTrend,
       cases,
       caseTrend,
+      daily,
       poe,
       poeRows,
       poeTrend,
@@ -68,6 +91,7 @@ export class AnalyticsService {
       this.labTrend(),
       this.caseSummary(),
       this.caseTrend(),
+      this.dailyTrend(),
       this.poeSummary(),
       this.poeRows(),
       this.poeTrend(),
@@ -100,10 +124,29 @@ export class AnalyticsService {
       labs: {
         ...labs,
         trend: labTrend,
+        daily: daily.map(
+          ({ date, tests, positive, people, peoplePositive }) => ({
+            date,
+            tests,
+            positive,
+            people,
+            peoplePositive,
+          }),
+        ),
       },
       cases: {
         ...cases,
         trend: caseTrend,
+        daily: daily.map(
+          ({ date, cases, confirmed, deaths, recoveries, contacts }) => ({
+            date,
+            cases,
+            confirmed,
+            deaths,
+            recoveries,
+            contacts,
+          }),
+        ),
       },
       poe: {
         ...poe,
@@ -222,8 +265,7 @@ export class AnalyticsService {
         WHERE event_at >= $2::timestamptz
       ),
       bounds AS (
-        SELECT max(event_at) AS max_event_at
-        FROM scoped
+        SELECT $3::timestamptz AS window_end
       )
       SELECT
         coalesce(sum(total_test_count), 0)::int AS tests_done,
@@ -250,13 +292,23 @@ export class AnalyticsService {
         to_char(min(coalesce(reporting_result_date, reporting_collection_date)), 'YYYY-MM-DD') AS first_test,
         to_char(max(coalesce(reporting_result_date, reporting_collection_date)), 'YYYY-MM-DD') AS last_test,
         coalesce(sum(total_test_count) FILTER (
-          WHERE event_at > bounds.max_event_at - interval '24 hours'
-            AND event_at <= bounds.max_event_at
-        ), 0)::int AS tests_24h
+          WHERE event_at > bounds.window_end - interval '24 hours'
+            AND event_at <= bounds.window_end
+        ), 0)::int AS tests_24h,
+        count(DISTINCT coalesce(
+          nullif(subject_identifier, ''),
+          nullif(case_identifier, '')
+        )) FILTER (
+          WHERE event_at > bounds.window_end - interval '24 hours'
+            AND event_at <= bounds.window_end
+        )::int AS patients_24h,
+        count(DISTINCT ${LAB_PERSON_KEY}) FILTER (
+          WHERE positive_test_count > 0
+        )::int AS patients_positive
       FROM scoped
       CROSS JOIN bounds
     `,
-      [EVD_LAB_TEST_CODE, resolveSurveillanceStartDate()],
+      [EVD_LAB_TEST_CODE, resolveSurveillanceStartDate(), windowEnd()],
     );
 
     const testsDone = num(row.tests_done);
@@ -271,6 +323,8 @@ export class AnalyticsService {
       unknownResults: num(row.unknown),
       positivityPct: num(row.positivity_pct),
       patientsTested: num(row.patients_tested),
+      patientsPositive: num(row.patients_positive),
+      newPatientsTested24h: num(row.patients_24h),
       avgTatDays: nullableNum(row.avg_tat_days),
       firstTest: dateString(row.first_test),
       lastTest: dateString(row.last_test),
@@ -321,6 +375,9 @@ export class AnalyticsService {
     }));
   }
 
+  // Confirmed cases are the warehouse's: final_confirmed_count is 1 only on
+  // the first record linked to a positive LIMS EVD case (plus lab-only cases
+  // with no form), so the sum is distinct lab-confirmed cases.
   private async caseSummary() {
     const row = await this.one(
       `
@@ -332,8 +389,7 @@ export class AnalyticsService {
         WHERE ${CASE_EVENT_AT} >= $1::timestamptz
       ),
       case_bounds AS (
-        SELECT max(event_at) AS max_event_at
-        FROM case_base
+        SELECT $2::timestamptz AS window_end
       ),
       outcome_base AS (
         SELECT
@@ -343,8 +399,7 @@ export class AnalyticsService {
         WHERE ${OUTCOME_EVENT_AT} >= $1::timestamptz
       ),
       outcome_bounds AS (
-        SELECT max(event_at) AS max_event_at
-        FROM outcome_base
+        SELECT $2::timestamptz AS window_end
       )
       SELECT
         coalesce(sum(total_investigation_count), 0)::int AS total_cases,
@@ -361,25 +416,25 @@ export class AnalyticsService {
           WHERE nullif(btrim(specimen_identifier), '') IS NOT NULL
         )::int AS with_specimen_id,
         coalesce(sum(total_investigation_count) FILTER (
-          WHERE c.event_at > cb.max_event_at - interval '24 hours'
-            AND c.event_at <= cb.max_event_at
+          WHERE c.event_at > cb.window_end - interval '24 hours'
+            AND c.event_at <= cb.window_end
         ), 0)::int AS cases_24h,
         coalesce(sum(final_confirmed_count) FILTER (
-          WHERE c.event_at > cb.max_event_at - interval '24 hours'
-            AND c.event_at <= cb.max_event_at
+          WHERE c.event_at > cb.window_end - interval '24 hours'
+            AND c.event_at <= cb.window_end
         ), 0)::int AS confirmed_24h,
         (
           SELECT coalesce(sum(deceased_count) FILTER (
-            WHERE o.event_at > ob.max_event_at - interval '24 hours'
-              AND o.event_at <= ob.max_event_at
+            WHERE o.event_at > ob.window_end - interval '24 hours'
+              AND o.event_at <= ob.window_end
           ), 0)::int
           FROM outcome_base o
           CROSS JOIN outcome_bounds ob
         ) AS deaths_24h,
         (
           SELECT coalesce(sum(recovered_count) FILTER (
-            WHERE o.event_at > ob.max_event_at - interval '24 hours'
-              AND o.event_at <= ob.max_event_at
+            WHERE o.event_at > ob.window_end - interval '24 hours'
+              AND o.event_at <= ob.window_end
           ), 0)::int
           FROM outcome_base o
           CROSS JOIN outcome_bounds ob
@@ -387,11 +442,24 @@ export class AnalyticsService {
         (SELECT coalesce(sum(total_contact_registration_count), 0)::int
           FROM gold.report_contact_registration
           WHERE ${CONTACT_EVENT_AT} >= $1::timestamptz) AS contacts_listed,
-        to_char(max(cb.max_event_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS') AS case_24h_window_end
+        (
+          SELECT coalesce(sum(ct.total_contact_registration_count) FILTER (
+            WHERE ct.event_at > $2::timestamptz - interval '24 hours'
+              AND ct.event_at <= $2::timestamptz
+          ), 0)::int
+          FROM (
+            SELECT
+              total_contact_registration_count,
+              ${CONTACT_EVENT_AT} AS event_at
+            FROM gold.report_contact_registration
+            WHERE ${CONTACT_EVENT_AT} >= $1::timestamptz
+          ) ct
+        ) AS contacts_24h,
+        to_char(max(cb.window_end) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS') AS case_24h_window_end
       FROM case_base c
       CROSS JOIN case_bounds cb
     `,
-      [resolveSurveillanceStartDate()],
+      [resolveSurveillanceStartDate(), windowEnd()],
     );
 
     const totalCases = num(row.total_cases);
@@ -413,6 +481,7 @@ export class AnalyticsService {
       latestCaseDate: dateString(row.case_24h_window_end),
       last24hWindowEnd: stringValue(row.case_24h_window_end),
       contactsListed: num(row.contacts_listed),
+      newContacts24h: num(row.contacts_24h),
       contactsFollowedUp: null,
       importedCases: null,
       localCases: null,
@@ -497,6 +566,97 @@ export class AnalyticsService {
     }));
   }
 
+  // Daily counts for the last 14 calendar days ending today in Nairobi. Every
+  // day is returned, with zero where nothing was reported, so a source that
+  // has gone quiet shows as quiet rather than as its last busy fortnight.
+  private async dailyTrend() {
+    const local = (eventAt: string) =>
+      `(${eventAt} AT TIME ZONE '${REPORTING_TIME_ZONE}')::date`;
+    const rows = await this.many(
+      `
+      WITH days AS (
+        SELECT day::date AS day
+        FROM generate_series($3::date - 13, $3::date, interval '1 day') AS day
+      ),
+      case_daily AS (
+        SELECT
+          ${local(CASE_EVENT_AT)} AS day,
+          sum(total_investigation_count) AS cases,
+          sum(final_confirmed_count) AS confirmed
+        FROM gold.report_case_investigation
+        WHERE ${CASE_EVENT_AT} >= $2::timestamptz
+        GROUP BY 1
+      ),
+      outcome_daily AS (
+        SELECT
+          ${local(OUTCOME_EVENT_AT)} AS day,
+          sum(deceased_count) AS deaths,
+          sum(recovered_count) AS recoveries
+        FROM gold.report_treatment_outcome
+        WHERE ${OUTCOME_EVENT_AT} >= $2::timestamptz
+        GROUP BY 1
+      ),
+      lab_daily AS (
+        SELECT
+          ${local(LAB_EVENT_AT)} AS day,
+          sum(total_test_count) AS tests,
+          sum(positive_test_count) AS positive,
+          count(DISTINCT coalesce(
+            nullif(subject_identifier, ''),
+            nullif(case_identifier, '')
+          )) AS people,
+          count(DISTINCT coalesce(
+            nullif(subject_identifier, ''),
+            nullif(case_identifier, '')
+          )) FILTER (WHERE positive_test_count > 0) AS people_positive
+        FROM gold.report_lab_result
+        WHERE test_code = $1
+          AND ${LAB_EVENT_AT} >= $2::timestamptz
+        GROUP BY 1
+      ),
+      contact_daily AS (
+        SELECT
+          ${local(CONTACT_EVENT_AT)} AS day,
+          sum(total_contact_registration_count) AS contacts
+        FROM gold.report_contact_registration
+        WHERE ${CONTACT_EVENT_AT} >= $2::timestamptz
+        GROUP BY 1
+      )
+      SELECT
+        to_char(d.day, 'YYYY-MM-DD') AS date,
+        coalesce(c.cases, 0)::int AS cases,
+        coalesce(c.confirmed, 0)::int AS confirmed,
+        coalesce(o.deaths, 0)::int AS deaths,
+        coalesce(o.recoveries, 0)::int AS recoveries,
+        coalesce(l.tests, 0)::int AS tests,
+        coalesce(l.positive, 0)::int AS positive,
+        coalesce(l.people, 0)::int AS people,
+        coalesce(l.people_positive, 0)::int AS people_positive,
+        coalesce(ct.contacts, 0)::int AS contacts
+      FROM days d
+      LEFT JOIN case_daily c ON c.day = d.day
+      LEFT JOIN outcome_daily o ON o.day = d.day
+      LEFT JOIN lab_daily l ON l.day = d.day
+      LEFT JOIN contact_daily ct ON ct.day = d.day
+      ORDER BY d.day
+    `,
+      [EVD_LAB_TEST_CODE, resolveSurveillanceStartDate(), nairobiToday()],
+    );
+
+    return rows.map((row) => ({
+      date: dateString(row.date),
+      cases: num(row.cases),
+      confirmed: num(row.confirmed),
+      deaths: num(row.deaths),
+      recoveries: num(row.recoveries),
+      tests: num(row.tests),
+      positive: num(row.positive),
+      people: num(row.people),
+      peoplePositive: num(row.people_positive),
+      contacts: num(row.contacts),
+    }));
+  }
+
   private async poeSummary() {
     const row = await this.one(
       `
@@ -506,10 +666,10 @@ export class AnalyticsService {
           ${SCREENING_EVENT_AT} AS event_at
         FROM gold.report_screening
         WHERE ${SCREENING_EVENT_AT} >= $1::timestamptz
+          AND ${POE_PATHWAY}
       ),
       bounds AS (
-        SELECT max(event_at) AS max_event_at
-        FROM base
+        SELECT $2::timestamptz AS window_end
       )
       SELECT
         coalesce(sum(total_screening_count), 0)::int AS screening_records,
@@ -519,19 +679,19 @@ export class AnalyticsService {
         0::int AS confirmed,
         0::int AS tested,
         coalesce(sum(total_screening_count) FILTER (
-          WHERE event_at > bounds.max_event_at - interval '24 hours'
-            AND event_at <= bounds.max_event_at
+          WHERE event_at > bounds.window_end - interval '24 hours'
+            AND event_at <= bounds.window_end
         ), 0)::int AS screened_24h,
         coalesce(sum(flagged_screening_count) FILTER (
-          WHERE event_at > bounds.max_event_at - interval '24 hours'
-            AND event_at <= bounds.max_event_at
+          WHERE event_at > bounds.window_end - interval '24 hours'
+            AND event_at <= bounds.window_end
         ), 0)::int AS alerts_24h,
         to_char(min(reporting_date), 'YYYY-MM-DD') AS first_screening,
         to_char(max(reporting_date), 'YYYY-MM-DD') AS last_screening
       FROM base
       CROSS JOIN bounds
     `,
-      [resolveSurveillanceStartDate()],
+      [resolveSurveillanceStartDate(), windowEnd()],
     );
 
     const totalScreened = num(row.total_screened);
@@ -564,6 +724,7 @@ export class AnalyticsService {
           flagged_screening_count
         FROM gold.report_screening
         WHERE ${SCREENING_EVENT_AT} >= $1::timestamptz
+          AND ${POE_PATHWAY}
       )
       SELECT
         to_char(day, 'YYYY-MM-DD') AS date,
@@ -604,6 +765,7 @@ export class AnalyticsService {
         0::int AS tested
       FROM gold.report_screening
       WHERE ${SCREENING_EVENT_AT} >= $1::timestamptz
+        AND ${POE_PATHWAY}
       GROUP BY 1
       ORDER BY screened DESC, alerts DESC, name ASC
       LIMIT 20

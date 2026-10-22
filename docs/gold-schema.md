@@ -62,6 +62,15 @@ The API keeps the existing `totalCases` response key for compatibility, but its
 precise warehouse meaning is the sum of `total_investigation_count`.
 Classification totals use the final, not initial, classification measures.
 
+Since ETL `feat/nphiis` (22 Oct 2026) confirmation is lab-anchored in the
+warehouse: `final_confirmed_count` is 1 only on the first case record linked
+(by `lims_link_key`) to a POSITIVE LIMS EVD result, and positive LIMS cases
+with no NPHIIS/ADAM form are added as lab-only rows (`source_system = 'LIMS'`,
+`case_record_origin = 'LAB_ONLY'`). So `sum(final_confirmed_count)` is the
+number of distinct lab-confirmed cases, and the API's `cases.confirmed` and
+the operational Confirmed cases card read it unchanged. Repeat records keep
+`final_classification = 'CONFIRMED'` with `duplicate_lab_case_flag = 1`.
+
 ### `gold.report_contact_registration`
 
 Important dimensions:
@@ -76,6 +85,9 @@ Important dimensions:
 Additive measures include `total_contact_registration_count`, classification
 counts, `sampled_contact_count`, and data-completeness counts. The API maps
 `contactsListed` to `sum(total_contact_registration_count)`.
+`newContacts24h` is the same sum over the rolling 24-hour window anchored to
+the newest registration timestamp (see the 24-hour rule below).
+Daily contact registrations are served in `cases.daily` (see below).
 
 This report does not contain daily contact follow-up activity, so
 `contactsFollowedUp` remains unavailable.
@@ -169,16 +181,27 @@ date as a treatment outcome.
 | `meta.lastUpdated` | Greatest available event timestamp across all five reports; the laboratory contribution is EVD-only |
 | `cases` | Investigation totals/final classification from `report_case_investigation`; contacts from `report_contact_registration`; recovery/death from `report_treatment_outcome` |
 | `cases.trend` | Gold epi-week investigation totals combined with weekly validated treatment deaths; rows without a valid reporting epi-week are excluded from the dated trend |
+| `cases.newContacts24h` | Contact registrations in the rolling 24-hour window from `report_contact_registration` |
+| `cases.daily` | One row per calendar day for the last 14 days ending today in Nairobi (`{ date, cases, confirmed, deaths, recoveries, contacts }`), zero on days with no records. Cases from `report_case_investigation`, deaths/recoveries from `report_treatment_outcome`, contacts from `report_contact_registration`; each record is dated by its event timestamp converted to the Nairobi date |
+| `labs.patientsPositive` / `labs.newPatientsTested24h` | Distinct LIMS cases (case identifier with whitespace removed, matching the warehouse's `lims_link_key`) with at least one positive EVD test, and distinct people tested in the rolling 24-hour window |
+| `labs.daily` | Same 14-day window (`{ date, tests, positive, people, peoplePositive }`; people are distinct subjects per day) from EVD-only `report_lab_result`, dated by result time, falling back to the reporting result date and then the collection date |
 | `labs` | EVD-only test/result measures, distinct subjects, pending results, and average TAT from `report_lab_result` |
 | `labs.trend` | EVD-only weekly result period, falling back to collection period |
-| `poe` | Screening and flagged counts from `report_screening`, grouped by point of entry |
+| `poe` | Point-of-entry traveller screenings only (`surveillance_pathway = 'TRAVELLER'`) from `report_screening`, grouped by point of entry. Facility screenings (Taifa Care / KenyaEMR, pathway `FACILITY`) are excluded from the public figures |
 | `geography` | County totals from case investigations and treatment outcomes only |
 
-The `new*24h` fields are rolling 24-hour windows anchored to the newest event
-timestamp in the relevant Gold report, not to the server clock. The interval is
-open at the start and closed at the end: `event_at > max_event_at - 24 hours`
-and `event_at <= max_event_at`. This keeps historical snapshots meaningful and
-avoids counting both endpoints when source timestamps are daily at midnight.
+The `new*24h` fields count back 24 hours **from now** (the request time),
+passed into each query as a parameter: `event_at > now - 24 hours` and
+`event_at <= now`. A source that has not reported in the last day therefore
+shows zero. (Before 22 Oct 2026 the window was anchored to the newest record
+in each Gold report, which showed a stale source's last busy day as "last
+24h".) Because the pipelines load each day's data the following morning,
+these figures can read zero until the morning load has run.
+
+The analytics connection runs its session on `Africa/Nairobi` time and reads
+`DATE` columns as plain `YYYY-MM-DD` text, so calendar days and custom filter
+bounds mean Kenyan days whatever time zone the database server or the API
+process uses.
 
 ## Known unavailable or partial indicators
 

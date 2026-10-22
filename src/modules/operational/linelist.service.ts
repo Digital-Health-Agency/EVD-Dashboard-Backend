@@ -782,8 +782,9 @@ export function buildLinelistScope(
         baseClauses.length > 0
           ? `\n        WHERE ${baseClauses.join('\n          AND ')}`
           : '',
+      // Preset periods count back from now, not from the newest record.
       boundsCte: anchored
-        ? `,\n      bounds AS (\n        SELECT max(event_at) AS max_event_at\n        FROM base\n      )`
+        ? `,\n      bounds AS (\n        SELECT now() AS max_event_at\n      )`
         : '',
       crossJoin: anchored ? '\n        CROSS JOIN bounds' : '',
       predicate: clauses.join('\n          AND '),

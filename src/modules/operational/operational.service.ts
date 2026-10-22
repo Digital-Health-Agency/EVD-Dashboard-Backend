@@ -8,6 +8,7 @@ import {
 import {
   PERIOD_INTERVALS,
   num,
+  presetWindowDates,
   nullableNum,
   pending,
   source,
@@ -262,6 +263,30 @@ export function isGeographicScope(filters: {
   );
 }
 
+// The window a tab reports. A preset period ends today in Nairobi and runs
+// back its length, whatever dates the data in it happen to have. Custom and
+// all-time ranges report the span of the data found. A tab with no data in
+// its window reports no window, so the dashboard shows its empty state.
+export function servedWindow(
+  filters: { period: TabWindow['period'] },
+  dataFrom: string | null,
+  dataTo: string | null,
+  anchored: boolean,
+  now: Date = new Date(),
+): TabWindow {
+  const preset = anchored ? presetWindowDates(filters.period, now) : null;
+  if (!preset || (dataFrom === null && dataTo === null)) {
+    return { period: filters.period, from: dataFrom, to: dataTo, anchored };
+  }
+  return { period: filters.period, ...preset, anchored };
+}
+
+// Preset periods ("Last 24 hours" ... "Last 42 days") count back from now,
+// not from the newest record in each mart, so a source that has stopped
+// reporting shows an empty window rather than its last active weeks. The
+// bounds CTEs keep the max_event_at name the window predicates reference.
+const PERIOD_ANCHOR = 'now()';
+
 interface ScopedQuery {
   sql: string;
   params: unknown[];
@@ -283,12 +308,12 @@ export class OperationalService {
       this.labBreakdown(filters),
     ]);
 
-    const window: TabWindow = {
-      period: filters.period,
-      from: summary.windowFrom,
-      to: summary.windowTo,
-      anchored: summary.anchored,
-    };
+    const window = servedWindow(
+      filters,
+      summary.windowFrom,
+      summary.windowTo,
+      summary.anchored,
+    );
 
     const runtime = {
       periodStart: window.from,
@@ -409,12 +434,12 @@ export class OperationalService {
       this.poeDaily(filters),
     ]);
 
-    const window: TabWindow = {
-      period: filters.period,
-      from: summary.windowFrom,
-      to: summary.windowTo,
-      anchored: summary.anchored,
-    };
+    const window = servedWindow(
+      filters,
+      summary.windowFrom,
+      summary.windowTo,
+      summary.anchored,
+    );
 
     const runtime = {
       periodStart: window.from,
@@ -519,12 +544,12 @@ export class OperationalService {
       this.hfBreakdown(filters),
     ]);
 
-    const window: TabWindow = {
-      period: filters.period,
-      from: summary.windowFrom,
-      to: summary.windowTo,
-      anchored: summary.anchored,
-    };
+    const window = servedWindow(
+      filters,
+      summary.windowFrom,
+      summary.windowTo,
+      summary.anchored,
+    );
     const runtime = {
       periodStart: window.from,
       periodEnd: window.to,
@@ -660,12 +685,12 @@ export class OperationalService {
       this.contactsByCounty(filters),
     ]);
 
-    const window: TabWindow = {
-      period: filters.period,
-      from: summary.windowFrom,
-      to: summary.windowTo,
-      anchored: summary.anchored,
-    };
+    const window = servedWindow(
+      filters,
+      summary.windowFrom,
+      summary.windowTo,
+      summary.anchored,
+    );
 
     const runtime = {
       periodStart: window.from,
@@ -746,12 +771,12 @@ export class OperationalService {
       this.communityByCounty(filters),
     ]);
 
-    const window: TabWindow = {
-      period: filters.period,
-      from: summary.windowFrom,
-      to: summary.windowTo,
-      anchored: summary.anchored,
-    };
+    const window = servedWindow(
+      filters,
+      summary.windowFrom,
+      summary.windowTo,
+      summary.anchored,
+    );
 
     const runtime = {
       periodStart: window.from,
@@ -882,18 +907,18 @@ export class OperationalService {
       contactAgg,
     ];
 
-    const window: TabWindow = {
-      period: filters.period,
-      from: sections.reduce<string | null>(
+    const window = servedWindow(
+      filters,
+      sections.reduce<string | null>(
         (acc, section) => earliest(acc, section.windowFrom),
         null,
       ),
-      to: sections.reduce<string | null>(
+      sections.reduce<string | null>(
         (acc, section) => latest(acc, section.windowTo),
         null,
       ),
-      anchored: caseAgg.anchored,
-    };
+      caseAgg.anchored,
+    );
 
     const runtime = {
       periodStart: window.from,
@@ -964,19 +989,9 @@ export class OperationalService {
         tone: 'red',
         emphasis: 'important',
         value: confirmed,
-        detail: 'Case investigations finally classified confirmed',
+        detail: 'Cases with a positive EVD lab result, each counted once',
         provenance: caseProvenance,
         meta: withRuntimeMeta(catalogEntry('summary.confirmedCases'), runtime),
-      }),
-      buildCard({
-        key: 'currentAdmitted',
-        label: 'Current admitted',
-        tone: 'blue',
-        emphasis: 'important',
-        value: 0,
-        detail: 'Confirmed or probable cases currently admitted',
-        provenance: outcomeProvenance,
-        meta: withRuntimeMeta(catalogEntry('summary.currentAdmitted'), runtime),
       }),
       buildCard({
         key: 'recovered',
@@ -1047,12 +1062,6 @@ export class OperationalService {
         { key: 'name', label: 'Facility', align: 'text', pending: false },
         { key: 'alerts', label: 'Alerts', align: 'num', pending: false },
         { key: 'confirmed', label: 'Confirmed', align: 'num', pending: false },
-        {
-          key: 'currentAdmitted',
-          label: 'Current admitted',
-          align: 'num',
-          pending: true,
-        },
         { key: 'recovered', label: 'Recovered', align: 'num', pending: false },
         { key: 'deaths', label: 'Deaths', align: 'num', pending: false },
       ],
@@ -1200,7 +1209,7 @@ export class OperationalService {
       ),
       bounds AS (
         SELECT
-          max(event_at) AS max_event_at,
+          ${PERIOD_ANCHOR} AS max_event_at,
           max(ingested_at) AS max_ingested_at
         FROM base
       ),
@@ -1334,7 +1343,7 @@ export class OperationalService {
       ),
       bounds AS (
         SELECT
-          max(event_at) AS max_event_at,
+          ${PERIOD_ANCHOR} AS max_event_at,
           max(ingested_at) AS max_ingested_at
         FROM base
       ),
@@ -1481,7 +1490,7 @@ export class OperationalService {
       ),
       bounds AS (
         SELECT
-          max(event_at) AS max_event_at,
+          ${PERIOD_ANCHOR} AS max_event_at,
           max(ingested_at) AS max_ingested_at
         FROM base
       ),
@@ -1611,7 +1620,7 @@ export class OperationalService {
       ),
       bounds AS (
         SELECT
-          max(event_at) AS max_event_at,
+          ${PERIOD_ANCHOR} AS max_event_at,
           max(ingested_at) AS max_ingested_at
         FROM base
       ),
@@ -1711,7 +1720,7 @@ export class OperationalService {
       ),
       bounds AS (
         SELECT
-          max(event_at) AS max_event_at,
+          ${PERIOD_ANCHOR} AS max_event_at,
           max(ingested_at) AS max_ingested_at
         FROM base
       ),
@@ -1816,7 +1825,7 @@ export class OperationalService {
       ),
       bounds AS (
         SELECT
-          max(event_at) AS max_event_at,
+          ${PERIOD_ANCHOR} AS max_event_at,
           max(ingested_at) AS max_ingested_at
         FROM base
       ),
@@ -2042,7 +2051,7 @@ export class OperationalService {
         FROM gold.report_community_signals
       ),
       community_bounds AS (
-        SELECT max(event_at) AS max_event_at
+        SELECT ${PERIOD_ANCHOR} AS max_event_at
         FROM community_base
       ),
       community_scoped AS (
@@ -2064,7 +2073,7 @@ export class OperationalService {
         WHERE test_code = $1
       ),
       lab_bounds AS (
-        SELECT max(event_at) AS max_event_at
+        SELECT ${PERIOD_ANCHOR} AS max_event_at
         FROM lab_base
       ),
       lab_scoped AS (
@@ -2156,7 +2165,7 @@ export class OperationalService {
         FROM gold.report_case_investigation
       ),
       case_bounds AS (
-        SELECT max(event_at) AS max_event_at
+        SELECT ${PERIOD_ANCHOR} AS max_event_at
         FROM case_base
       ),
       case_scoped AS (
@@ -2178,7 +2187,7 @@ export class OperationalService {
         FROM gold.report_treatment_outcome
       ),
       outcome_bounds AS (
-        SELECT max(event_at) AS max_event_at
+        SELECT ${PERIOD_ANCHOR} AS max_event_at
         FROM outcome_base
       ),
       outcome_scoped AS (
@@ -2254,7 +2263,6 @@ export class OperationalService {
         name: String(row.name),
         alerts: num(row.alerts),
         confirmed: num(row.confirmed),
-        currentAdmitted: null,
         recovered: num(row.recovered),
         deaths: num(row.deaths),
       })),
