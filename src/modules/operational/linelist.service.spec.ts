@@ -742,6 +742,19 @@ describe('LinelistService window resolution', () => {
 });
 
 describe('LinelistService filters', () => {
+  it('narrows cases to the counted confirmed cases on confirmed_case_flag', async () => {
+    const { service, calls } = harness();
+    await service.cases(parse({ confirmedCase: 'true' }));
+
+    for (const call of calls) {
+      expect(call.sql).toContain(
+        'lower(btrim((confirmed_case_flag > 0)::text)) = lower(btrim($2))',
+      );
+      expect(call.sql).not.toContain('final_classification)) =');
+    }
+    expect(countStatement(calls).values).toEqual([SURVEILLANCE_START, 'true']);
+  });
+
   it('binds a value filter against the mart column, normalised on both sides', async () => {
     const { service, calls } = harness();
     await service.signals(

@@ -80,6 +80,7 @@ type FilterKey =
   | 'poe'
   | 'facility'
   | 'screeningFlagged'
+  | 'confirmedCase'
   | 'signalVerified'
   | 'ageGroup'
   | 'signalStatus'
@@ -117,6 +118,10 @@ export const CASE_INVESTIGATION_FILTERS: FilterColumns = Object.freeze([
   ['ageGroup', 'reporting_age_group'],
   ['classification', 'final_classification'],
   ['initialClassification', 'initial_classification'],
+  // The cases the Confirmed cases figure counts: one per LIMS case with a
+  // positive EVD result. final_classification = 'CONFIRMED' also matches
+  // source-reported confirmations with no linked positive and repeat records.
+  ['confirmedCase', 'confirmed_case_flag'],
 ] as const);
 
 export const TREATMENT_OUTCOME_FILTERS: FilterColumns = Object.freeze([
@@ -730,7 +735,7 @@ export function buildLinelistScope(
         return `lower(btrim($${params.length}))`;
       });
       const predicateColumn =
-        key === 'screeningFlagged'
+        key === 'screeningFlagged' || key === 'confirmedCase'
           ? `(${column} > 0)::text`
           : key === 'signalVerified'
             ? `${column}::text`
