@@ -193,6 +193,22 @@ export const SCREENING_COLUMNS = Object.freeze({
     byDefault: false,
     searchable: true,
   },
+  // Requires the ETL change that adds these columns to
+  // gold.report_screening (branch feat/screening-sex-age-group).
+  source_person_sex: {
+    column: 'source_person_sex',
+    exposure: 'authenticated',
+    sortable: true,
+    byDefault: true,
+    searchable: false,
+  },
+  reporting_age_group: {
+    column: 'reporting_age_group',
+    exposure: 'authenticated',
+    sortable: true,
+    byDefault: true,
+    searchable: false,
+  },
   source_classification: {
     column: 'source_classification',
     exposure: 'public',
