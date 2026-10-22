@@ -179,6 +179,20 @@ export const SCREENING_COLUMNS = Object.freeze({
     byDefault: true,
     searchable: true,
   },
+  reporting_facility_name: {
+    column: 'reporting_facility_name',
+    exposure: 'authenticated',
+    sortable: true,
+    byDefault: true,
+    searchable: true,
+  },
+  reporting_county: {
+    column: 'reporting_county',
+    exposure: 'authenticated',
+    sortable: true,
+    byDefault: false,
+    searchable: true,
+  },
   source_classification: {
     column: 'source_classification',
     exposure: 'public',

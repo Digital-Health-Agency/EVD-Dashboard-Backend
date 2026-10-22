@@ -24,6 +24,7 @@ export const COLUMN_LABELS: Readonly<Record<string, string>> = Object.freeze({
   screening_key: 'Record ID',
   screening_date: 'Screening date',
   reporting_point_of_entry: 'Point of entry',
+  reporting_facility_name: 'Health facility',
   source_classification: 'Source classification',
   screening_outcome: 'Screening outcome',
   reporting_screening_category: 'Screening category',
