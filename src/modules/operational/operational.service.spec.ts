@@ -1605,6 +1605,42 @@ async function runSummaryTab(
   return { payload, ...probe };
 }
 
+describe('period anchor CTEs', () => {
+  // A bounds CTE that selects now() FROM a table returns one row per table
+  // row, and cross-joining it multiplies every row it touches (this inflated
+  // the Summary facility table and daily flow in v3.9.0).
+  it('return a single row: now() is never selected from a table without an aggregate', async () => {
+    const runs = await Promise.all([
+      runSummaryTab({ period: '21d' }),
+      runLabsTab({ period: '21d' }),
+      runPoeTab({ period: '21d' }),
+      runHfTab({ period: '21d' }),
+      runContactsTab({ period: '21d' }),
+      runCommunityTab({ period: '21d' }),
+    ]);
+
+    const statements = runs.flatMap((run) => run.queries);
+    let anchors = 0;
+    for (const sql of statements) {
+      let at = sql.indexOf('now() AS max_event_at');
+      while (at !== -1) {
+        anchors += 1;
+        // The anchor's own SELECT: from the nearest SELECT before it to the
+        // closing parenthesis of its CTE.
+        const select = sql.slice(
+          sql.lastIndexOf('SELECT', at),
+          sql.indexOf('\n      )', at),
+        );
+        if (/\bFROM\b/.test(select)) {
+          expect(select, sql.slice(0, 120)).toMatch(/\bmax\(/);
+        }
+        at = sql.indexOf('now() AS max_event_at', at + 1);
+      }
+    }
+    expect(anchors).toBeGreaterThan(0);
+  });
+});
+
 describe('OperationalService.summaryTab', () => {
   it('carries exactly the four Section 7 cards, in order, all important', async () => {
     const { payload } = await runSummaryTab();
