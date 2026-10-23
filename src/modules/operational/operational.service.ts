@@ -285,6 +285,9 @@ export function servedWindow(
 // not from the newest record in each mart, so a source that has stopped
 // reporting shows an empty window rather than its last active weeks. The
 // bounds CTEs keep the max_event_at name the window predicates reference.
+// A bounds CTE must return exactly one row: select the anchor with no FROM
+// (or alongside an aggregate). `SELECT now() FROM <table>` returns one row
+// per table row and multiplies every row it is cross-joined with.
 const PERIOD_ANCHOR = 'now()';
 
 interface ScopedQuery {
@@ -2052,7 +2055,6 @@ export class OperationalService {
       ),
       community_bounds AS (
         SELECT ${PERIOD_ANCHOR} AS max_event_at
-        FROM community_base
       ),
       community_scoped AS (
         SELECT community_base.*
@@ -2074,7 +2076,6 @@ export class OperationalService {
       ),
       lab_bounds AS (
         SELECT ${PERIOD_ANCHOR} AS max_event_at
-        FROM lab_base
       ),
       lab_scoped AS (
         SELECT lab_base.*
@@ -2166,7 +2167,6 @@ export class OperationalService {
       ),
       case_bounds AS (
         SELECT ${PERIOD_ANCHOR} AS max_event_at
-        FROM case_base
       ),
       case_scoped AS (
         SELECT case_base.*
@@ -2188,7 +2188,6 @@ export class OperationalService {
       ),
       outcome_bounds AS (
         SELECT ${PERIOD_ANCHOR} AS max_event_at
-        FROM outcome_base
       ),
       outcome_scoped AS (
         SELECT outcome_base.*
