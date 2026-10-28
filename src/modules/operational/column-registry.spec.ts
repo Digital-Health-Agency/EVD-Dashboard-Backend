@@ -85,7 +85,7 @@ function firstPiiKey(registry: DatasetRegistry): string {
 }
 
 describe('linelist display column contract', () => {
-  it('labels all 81 distinct registry identifiers with human text', async () => {
+  it('labels all 100 distinct registry identifiers with human text', async () => {
     const modulePath = './column-labels.js';
     const labels = (await import(modulePath)) as {
       COLUMN_LABELS: Readonly<Record<string, string>>;
@@ -99,7 +99,7 @@ describe('linelist display column contract', () => {
       ),
     ];
 
-    expect(Object.keys(labels.COLUMN_LABELS)).toHaveLength(81);
+    expect(Object.keys(labels.COLUMN_LABELS)).toHaveLength(100);
     for (const identifier of identifiers) {
       expect(labels.labelFor(identifier).trim()).not.toBe('');
       if (identifier.includes('_')) {
@@ -228,13 +228,14 @@ describe('the registry covers exactly the six linelist datasets', () => {
     }
   });
 
-  it('classifies exactly ten specs as pii across the six registries', () => {
+  it('classifies exactly twelve specs as pii across the six registries', () => {
     const perRegistry = datasetKeys.map(
       (key) => piiColumns(registryFor(key)).length,
     );
 
-    expect(perRegistry).toEqual([1, 2, 2, 2, 2, 1]);
-    expect(perRegistry.reduce((total, count) => total + count, 0)).toBe(10);
+    // Screenings carry two phone fields (traveller and dependant) from UHAI.
+    expect(perRegistry).toEqual([1, 4, 2, 2, 2, 1]);
+    expect(perRegistry.reduce((total, count) => total + count, 0)).toBe(12);
   });
 
   it('keys every entry to its own SQL identifier, so no key aliases a column', () => {
@@ -551,8 +552,10 @@ describe('no aggregate service names a potentially-identifying column', () => {
 
   it('classifies every identifying column the registries still source', () => {
     expect(allPii.sort()).toEqual([
+      'dependent_phone_number',
       'person_identifier',
       'person_name',
+      'person_phone_number',
       'signal_description',
       'source_contact_identifier',
       'source_contact_name',
@@ -566,6 +569,56 @@ describe('no aggregate service names a potentially-identifying column', () => {
     const contents = readFileSync(join(moduleDir, file), 'utf8');
     for (const column of allPii) {
       expect(contents).not.toContain(column);
+    }
+  });
+});
+
+describe('screening contact and travel columns', () => {
+  const screenings = columnRegistryModule.SCREENING_COLUMNS as Record<
+    string,
+    { exposure: string; byDefault: boolean; searchable: boolean }
+  >;
+
+  it('treats both phone numbers as personal data, hidden by default but searchable', () => {
+    for (const column of ['person_phone_number', 'dependent_phone_number']) {
+      expect(screenings[column], column).toMatchObject({
+        exposure: 'pii',
+        byDefault: false,
+        searchable: true,
+      });
+    }
+  });
+
+  it('shows country of departure by default to signed-in users', () => {
+    expect(screenings.country_of_departure).toMatchObject({
+      exposure: 'authenticated',
+      byDefault: true,
+    });
+  });
+
+  it('keeps every other new UHAI field optional and non-personal', () => {
+    for (const column of [
+      'entry_country',
+      'arrival_date',
+      'mode_of_transport',
+      'transport_number',
+      'seat_number',
+      'temperature',
+      'symptoms',
+      'risk_factors',
+      'visited_affected_countries',
+      'contact_with_confirmed_case',
+      'healthcare_lab_work',
+      'funeral_body_prep',
+      'contact_animals',
+      'bushmeat_handling',
+      'forest_cave_exposure',
+      'screening_channel',
+    ]) {
+      expect(screenings[column], column).toMatchObject({
+        exposure: 'authenticated',
+        byDefault: false,
+      });
     }
   });
 });
