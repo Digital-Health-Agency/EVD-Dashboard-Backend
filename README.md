@@ -38,7 +38,8 @@ src/
     notification/  In-app notification records and inbox APIs
     mail/          Injectable SMTP mail service
     sms/           Injectable SMS service and delivery callback
-    analytics/     Read-only gold-mart queries behind /api/analytics/metrics
+    analytics/     Gold-backed analytics with reconciled national headline figures
+    reconciliation/ Official dated headline records, optimistic writes, and record audit history
   scripts/         Standalone scripts such as the admin seeder
   health.controller.ts  Public health check endpoint
 ```
@@ -50,6 +51,10 @@ src/
 | `*`                     | `/api/auth/*`                    | Better Auth routes                             |
 | `GET`                   | `/health`                        | Public health check                            |
 | `GET`                   | `/api/analytics/metrics`         | Gold-backed dashboard analytics                |
+| `GET/POST`              | `/api/reconciliation/headline`   | List or create official dated headline records |
+| `GET/PATCH/DELETE`       | `/api/reconciliation/headline/:situationDate` | Read, amend or clear a dated record |
+| `GET`                   | `/api/reconciliation/headline/:situationDate/history` | Paginated record audit history |
+| `GET`                   | `/api/reconciliation/warehouse` | Warehouse figures for comparison |
 | CRUD                    | `/api/users`                     | Admin user management                          |
 | `GET/PATCH/POST/DELETE` | `/api/users/me`                  | Current user profile and deactivation/deletion |
 | `POST`                  | `/api/upload`                    | Upload one file and persist media metadata     |
@@ -63,6 +68,48 @@ src/
 | `POST`                  | `/sms/callbacks/delivery`        | SMS provider delivery callback                 |
 
 Use `x-evd-app-id: dashboard` when a request needs dashboard-specific reset-link routing.
+
+## Reconciled Headline Figures
+
+Users need the explicit `reconciliation` role to list, enter, amend or clear
+headline records and read their history. Administrators grant this role through
+user management; the `admin` role alone does not grant reconciliation access.
+
+Public headline figures use official records by situation date. A blank cumulative
+field carries forward the most recent earlier nonblank official value, then falls
+back to the warehouse if no official value exists. An explicit zero is a value.
+Blank 24-hour fields fall back to the warehouse without carrying an earlier day's
+24-hour figure forward. Screening-point capacity also uses only the latest date;
+a blank capacity falls back to the warehouse.
+
+Each record has an `operational_override` toggle, defaulting to `false`. For a
+national operational Summary, the latest applicable record's enabled toggle allows
+confirmed cases, recoveries and deaths to use reconciled values; CFR is calculated
+from those figures. Geography-filtered summaries continue to use their warehouse
+scope.
+
+`GET /api/reconciliation/headline/:situationDate` returns `revision` and
+`record_id`. PATCH bodies must include both `expected_revision` and
+`expected_record_id` from that response; DELETE requires those values as query
+parameters. Stale writes return HTTP 409. Reload the latest record before retrying.
+Writes and their before/after audit values commit in the same transaction. Record
+history uses `page` (default 1) and `limit` (default 20, maximum 100), and remains
+available after clearing a record. Reconciliation events are excluded from the
+general audit views.
+
+To seed the nine source records from 27 September through 6 October 2026:
+
+```bash
+npm run seed:headline
+# For a compiled production installation:
+npm run seed:headline:prod
+```
+
+Run from the backend directory. The seeder loads `.env` and resolves the auth
+metadata connection using `AUTH_DATABASE_URL`, with `DATABASE_URL` as its legacy
+fallback. It creates missing dates with audit events and operational override off;
+rerunning skips existing dates without overwriting their figures or adding audit
+events.
 
 ## Environment Variables
 
@@ -96,4 +143,15 @@ npm run build
 npm test
 ```
 
-Tests use `pg-mem` for isolated in-memory PostgreSQL-compatible databases.
+Tests use `pg-mem` for isolated in-memory PostgreSQL-compatible databases. To
+verify transaction rollback, simultaneous writes, record replacement protection,
+seed idempotency and authenticated role boundaries against real PostgreSQL:
+
+```bash
+npm run build
+HEADLINE_POSTGRES_TEST=1 node --env-file=.env node_modules/vitest/vitest.mjs run src/modules/reconciliation/headline-postgres.spec.ts
+```
+
+This opt-in suite uses `DATABASE_URL` and creates a disposable, uniquely named
+schema that it removes afterward. The database account must be able to create
+schemas; the suite does not write to existing application tables.

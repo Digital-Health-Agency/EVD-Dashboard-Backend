@@ -323,6 +323,19 @@ describe('user account role schemas', () => {
     );
   });
 
+  it('accepts the reconciliation grant on create and on update', () => {
+    expect(
+      createUserSchema.parse({
+        name: 'x',
+        email: 'A@B.io',
+        role: 'admin,reconciliation',
+      }).role,
+    ).toBe('admin,reconciliation');
+    expect(updateUserSchema.parse({ role: 'reconciliation' }).role).toBe(
+      'reconciliation',
+    );
+  });
+
   it('keeps self-escalation closed — updateMeSchema has no role key', () => {
     expect(Object.keys(updateMeSchema.parse({ name: 'x' }))).not.toContain(
       'role',

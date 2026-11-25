@@ -32,26 +32,33 @@ export class AuditService {
 
   constructor(@Inject(AUTH_POSTGRES_POOL) private readonly db: Queryable) {}
 
-  async record(event: AuditEventInput): Promise<void> {
-    try {
-      await this.db.query(
-        `
+  async recordOrThrow(
+    event: AuditEventInput,
+    db: Queryable = this.db,
+  ): Promise<void> {
+    await db.query(
+      `
         INSERT INTO audit_events
           (id, "eventType", "actorId", "actorRole", dataset, columns, filters, "rowCount", outcome)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       `,
-        [
-          randomUUID(),
-          event.eventType,
-          event.actorId ?? null,
-          event.actorRole ?? null,
-          event.dataset ?? null,
-          [...event.columns],
-          JSON.stringify(event.filters ?? {}),
-          event.rowCount ?? null,
-          event.outcome ?? 'ok',
-        ],
-      );
+      [
+        randomUUID(),
+        event.eventType,
+        event.actorId ?? null,
+        event.actorRole ?? null,
+        event.dataset ?? null,
+        [...event.columns],
+        JSON.stringify(event.filters ?? {}),
+        event.rowCount ?? null,
+        event.outcome ?? 'ok',
+      ],
+    );
+  }
+
+  async record(event: AuditEventInput): Promise<void> {
+    try {
+      await this.recordOrThrow(event);
     } catch (error: unknown) {
       const failure = error instanceof Error ? error : new Error(String(error));
       this.logger.error(
@@ -64,7 +71,7 @@ export class AuditService {
   async findAll(query: AuditQueryDto): Promise<AuditEventPage> {
     const { page, limit } = query;
     const values: unknown[] = [];
-    const predicates: string[] = [];
+    const predicates: string[] = [`e."eventType" <> 'headline_override'`];
 
     if (query.eventType !== undefined) {
       values.push(query.eventType);

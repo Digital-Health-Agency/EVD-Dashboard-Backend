@@ -1,9 +1,35 @@
-export const PERIOD_INTERVALS: Readonly<Record<string, string>> = Object.freeze({
-  '24h': '24 hours',
-  '7d': '7 days',
-  '21d': '21 days',
-  '42d': '42 days',
+import { nairobiToday } from './nairobi-date.js';
+
+export const PERIOD_INTERVALS: Readonly<Record<string, string>> = Object.freeze(
+  {
+    '24h': '24 hours',
+    '7d': '7 days',
+    '21d': '21 days',
+    '42d': '42 days',
+  },
+);
+
+const PERIOD_SPAN_DAYS: Readonly<Record<string, number>> = Object.freeze({
+  '24h': 1,
+  '7d': 7,
+  '21d': 21,
+  '42d': 42,
 });
+
+// The calendar dates a preset period covers: today in Nairobi, back the
+// period's length. Null for 'all' and 'custom', which have no preset span.
+export function presetWindowDates(
+  period: string,
+  now: Date = new Date(),
+): { from: string; to: string } | null {
+  const span = PERIOD_SPAN_DAYS[period];
+  if (span === undefined) return null;
+  const to = nairobiToday(now);
+  const from = new Date(Date.parse(`${to}T00:00:00Z`) - span * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+  return { from, to };
+}
 
 export type SourceState = 'live' | 'pending' | 'na';
 

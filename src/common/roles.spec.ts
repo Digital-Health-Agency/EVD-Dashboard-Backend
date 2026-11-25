@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AUTH_ROLES,
+  RECONCILIATION_ROLE,
   SURVEILLANCE_ROLE,
   hasAnyRole,
   hasRole,
@@ -14,6 +15,18 @@ const subsets: AuthRoleName[][] = Array.from(
   (_, index) => AUTH_ROLES.filter((_role, bit) => ((index + 1) >> bit) & 1),
 );
 
+describe('AUTH_ROLES', () => {
+  it('declares the four role grants in canonical join order', () => {
+    expect(AUTH_ROLES).toEqual([
+      'user',
+      'admin',
+      'surveillance',
+      'reconciliation',
+    ]);
+    expect(RECONCILIATION_ROLE).toBe('reconciliation');
+  });
+});
+
 describe('parseRoles', () => {
   it('resolves a compound role to a canonically ordered set', () => {
     expect(parseRoles('admin,surveillance')).toEqual(['admin', 'surveillance']);
@@ -24,6 +37,18 @@ describe('parseRoles', () => {
     ]);
     expect(parseRoles('admin,admin')).toEqual(['admin']);
     expect(parseRoles('root,admin')).toEqual(['admin']);
+  });
+
+  it('resolves the reconciliation grant in canonical tuple order', () => {
+    expect(parseRoles('admin,reconciliation')).toEqual([
+      'admin',
+      'reconciliation',
+    ]);
+    expect(parseRoles('reconciliation, surveillance, admin')).toEqual([
+      'admin',
+      'surveillance',
+      'reconciliation',
+    ]);
   });
 
   it('matches whole tokens only, never a substring', () => {
@@ -56,6 +81,13 @@ describe('hasRole', () => {
     expect(hasRole(null, SURVEILLANCE_ROLE)).toBe(false);
     expect(hasRole(undefined, SURVEILLANCE_ROLE)).toBe(false);
   });
+
+  it('does not treat admin as a holder of the reconciliation grant', () => {
+    expect(hasRole('admin', RECONCILIATION_ROLE)).toBe(false);
+    expect(hasRole('admin,surveillance', RECONCILIATION_ROLE)).toBe(false);
+    expect(hasRole('user,reconciliation', RECONCILIATION_ROLE)).toBe(true);
+    expect(hasRole('reconciliation-lead', RECONCILIATION_ROLE)).toBe(false);
+  });
 });
 
 describe('hasAnyRole', () => {
@@ -81,6 +113,12 @@ describe('normalizeRoleString', () => {
     expect(normalizeRoleString(' Admin , SURVEILLANCE ').includes(' ')).toBe(
       false,
     );
+  });
+
+  it('serialises the reconciliation grant after admin with no space', () => {
+    const normalized = normalizeRoleString('reconciliation, admin');
+    expect(normalized).toBe('admin,reconciliation');
+    expect(normalized.includes(' ')).toBe(false);
   });
 
   it('falls back to user rather than throwing on an unusable role', () => {

@@ -1,6 +1,9 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 
-import { PERIOD_INTERVALS } from '../../common/analytics-helpers.js';
+import {
+  PERIOD_INTERVALS,
+  presetWindowDates,
+} from '../../common/analytics-helpers.js';
 import { clampToSurveillanceStart } from '../../common/surveillance-event.js';
 import {
   ANALYTICS_POSTGRES_POOL,
@@ -430,6 +433,12 @@ export class LinelistExportService {
         from: clampToSurveillanceStart(query.from.slice(0, 10)),
         to: query.to.slice(0, 10),
       };
+    }
+
+    // Preset periods end today in Nairobi, matching the rows exported.
+    const preset = presetWindowDates(query.period);
+    if (preset) {
+      return { from: clampToSurveillanceStart(preset.from), to: preset.to };
     }
 
     const interval =

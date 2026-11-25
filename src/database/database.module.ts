@@ -9,11 +9,32 @@ import {
   Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Pool, type QueryResultRow } from 'pg';
+import { Pool, types, type CustomTypesConfig, type QueryResultRow } from 'pg';
 
 export const POSTGRES_POOL = Symbol('POSTGRES_POOL');
 export const AUTH_POSTGRES_POOL = Symbol('AUTH_POSTGRES_POOL');
 export const ANALYTICS_POSTGRES_POOL = Symbol('ANALYTICS_POSTGRES_POOL');
+
+// Surveillance reporting is on Kenyan calendar days, whatever time zone the
+// database server or this process runs in:
+// - The session time zone is Africa/Nairobi, so a custom filter bound such as
+//   '2026-10-01 00:00:00' means midnight in Kenya, and ::date casts give
+//   Kenyan days.
+// - DATE columns come back as their 'YYYY-MM-DD' text. The default parser
+//   turns them into midnight in this process's time zone, which serialises
+//   to the previous day in UTC whenever the process runs east of UTC.
+export const ANALYTICS_SESSION_TIME_ZONE = 'Africa/Nairobi';
+
+const PG_DATE_OID = 1082;
+
+type TextParser = (value: string) => unknown;
+
+export const analyticsTypeParsers: CustomTypesConfig = {
+  getTypeParser: ((oid: number, format?: 'text' | 'binary'): TextParser => {
+    if (oid === PG_DATE_OID) return (value: string) => value;
+    return types.getTypeParser(oid, format) as TextParser;
+  }) as CustomTypesConfig['getTypeParser'],
+};
 
 export interface Queryable {
   query<T extends QueryResultRow = QueryResultRow>(
@@ -214,6 +235,32 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       );
       CREATE INDEX IF NOT EXISTS audit_events_actor_idx ON audit_events ("actorId", "createdAt" DESC);
       CREATE INDEX IF NOT EXISTS audit_events_type_idx ON audit_events ("eventType", "createdAt" DESC);
+
+      CREATE TABLE IF NOT EXISTS headline_overrides (
+        situation_date text PRIMARY KEY,
+        report_date text,
+        source_label text,
+        notes text,
+        confirmed_cases integer,
+        confirmed_cases_24h integer,
+        recoveries integer,
+        deaths integer,
+        samples_tested_total integer,
+        samples_tested_24h integer,
+        positive_samples integer,
+        negative_samples integer,
+        travellers_screened_total integer,
+        travellers_screened_24h integer,
+        screening_points integer,
+        contacts_listed integer,
+        "updatedBy" text,
+        "createdAt" timestamptz NOT NULL DEFAULT now(),
+        "updatedAt" timestamptz NOT NULL DEFAULT now()
+      );
+      ALTER TABLE headline_overrides ADD COLUMN IF NOT EXISTS operational_override boolean NOT NULL DEFAULT false;
+      ALTER TABLE headline_overrides ADD COLUMN IF NOT EXISTS revision integer NOT NULL DEFAULT 1;
+      ALTER TABLE headline_overrides ADD COLUMN IF NOT EXISTS record_id text NOT NULL DEFAULT '';
+      UPDATE headline_overrides SET record_id = 'legacy:' || situation_date WHERE record_id = '';
     `);
   }
 }
@@ -254,6 +301,8 @@ class AnalyticsPoolLifecycle implements OnModuleDestroy {
           connectionString: configService.getOrThrow<string>(
             'env.analyticsDatabaseUrl',
           ),
+          options: `-c timezone=${ANALYTICS_SESSION_TIME_ZONE}`,
+          types: analyticsTypeParsers,
         }),
     },
     AnalyticsPoolLifecycle,

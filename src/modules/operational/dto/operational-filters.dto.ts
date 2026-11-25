@@ -59,6 +59,7 @@ export const operationalFiltersSchema = z
     screeningCategory: filterValueSchema,
     screeningScope: z.literal('facility').optional(),
     screeningFlagged: z.literal('true').optional(),
+    confirmedCase: z.literal('true').optional(),
     signalVerified: z.literal('true').optional(),
     treatmentOutcome: filterValueSchema,
   })

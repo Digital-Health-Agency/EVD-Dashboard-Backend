@@ -329,7 +329,7 @@ export const INDICATOR_CATALOG: Readonly<
     indicatorId: 'summary.confirmedCases',
     displayName: 'Confirmed cases',
     definition:
-      'Case investigations finally classified confirmed within the selected window, counted from final_confirmed_count on gold.report_case_investigation. Measured at zero on the current warehouse, which is a real aggregate over a populated mart and renders as zero rather than as a dash.',
+      'Laboratory-confirmed cases within the selected window, counted from final_confirmed_count on gold.report_case_investigation. Since the ETL feat/nphiis change (22 Oct 2026) the warehouse sets this only on the first case record linked to a POSITIVE LIMS EVD result (86518-8), and adds lab-only rows for positive LIMS cases with no investigation form, so the sum is the number of distinct LIMS cases with a positive EVD result. Repeat records for the same LIMS case keep the CONFIRMED classification with duplicate_lab_case_flag = 1 and count zero.',
     countingUnit: 'case investigations',
     sourceSystem: ['ADAM'],
     refreshFrequency: 'Daily',

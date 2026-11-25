@@ -1,4 +1,8 @@
-export const AUDIT_EVENT_TYPES = ['pii_export', 'pii_column_denied'] as const;
+export const AUDIT_EVENT_TYPES = [
+  'pii_export',
+  'pii_column_denied',
+  'headline_override',
+] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
 
