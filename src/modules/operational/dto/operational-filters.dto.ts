@@ -62,6 +62,7 @@ export const operationalFiltersSchema = z
     confirmedCase: z.literal('true').optional(),
     signalVerified: z.literal('true').optional(),
     treatmentOutcome: filterValueSchema,
+    county: filterValueSchema,
   })
   .transform((filters) => ({
     ...filters,

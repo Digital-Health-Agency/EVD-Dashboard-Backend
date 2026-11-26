@@ -94,7 +94,8 @@ type FilterKey =
   | 'turnaroundBand'
   | 'screeningOutcome'
   | 'screeningCategory'
-  | 'treatmentOutcome';
+  | 'treatmentOutcome'
+  | 'county';
 
 export type FilterColumns = ReadonlyArray<readonly [FilterKey, string]>;
 
@@ -122,12 +123,15 @@ export const CASE_INVESTIGATION_FILTERS: FilterColumns = Object.freeze([
   // positive EVD result. final_classification = 'CONFIRMED' also matches
   // source-reported confirmations with no linked positive and repeat records.
   ['confirmedCase', 'confirmed_case_flag'],
+  // Summary county map; matched case-insensitively like every filter here.
+  ['county', 'reporting_county'],
 ] as const);
 
 export const TREATMENT_OUTCOME_FILTERS: FilterColumns = Object.freeze([
   ['ageGroup', 'reporting_age_group'],
   ['classification', 'final_classification'],
   ['treatmentOutcome', 'treatment_outcome'],
+  ['county', 'reporting_county'],
 ] as const);
 
 export const CONTACT_REGISTRATION_FILTERS: FilterColumns = Object.freeze([
