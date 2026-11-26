@@ -34,6 +34,7 @@ import {
 import type {
   IndicatorMeta,
   TabBreakdown,
+  TabGeography,
   TabCard,
   TabCardBreakdownEntry,
   TabChart,
@@ -107,6 +108,8 @@ const COMMUNITY_FILTER_COLUMNS: ReadonlyArray<
 const COMMUNITY_GROUP_EXPRESSION = `coalesce(nullif(btrim(county), ''), 'Not recorded')`;
 
 const BREAKDOWN_LIMIT = 50;
+// Kenya has 47 counties; the headroom keeps misspelt or foreign values visible.
+const COUNTY_LIMIT = 100;
 
 const NEGATIVE_TESTS_EXPR =
   '(coalesce(sum(total_test_count), 0) - coalesce(sum(positive_test_count), 0))::int';
@@ -887,6 +890,7 @@ export class OperationalService {
       contactAgg,
       flowRows,
       facilityGroups,
+      countyGroups,
     ] = await inBoundedGroups(
       [
         () => this.summaryCases(filters),
@@ -897,6 +901,7 @@ export class OperationalService {
         () => this.summaryContacts(filters),
         () => this.summaryDailyFlow(filters),
         () => this.summaryFacilities(filters),
+        () => this.summaryCounties(filters),
       ] as const,
       SUMMARY_MAX_CONCURRENT_QUERIES,
     );
@@ -1075,6 +1080,29 @@ export class OperationalService {
       meta: withRuntimeMeta(catalogEntry('summary.facilityBreakdown'), runtime),
     });
 
+    // Warehouse counts only: a manually entered headline override changes the
+    // cards but cannot be split by county.
+    const geography: TabGeography = {
+      title: 'Cases by county',
+      level: 'county',
+      indicators: [
+        { key: 'alerts', label: 'Alerts' },
+        { key: 'confirmedCases', label: 'Confirmed cases' },
+        { key: 'deaths', label: 'Deaths' },
+        { key: 'recovered', label: 'Recoveries' },
+      ],
+      rows: countyGroups.rows.map((row) => ({
+        name: row.name,
+        filterValue: row.filterValue,
+        alerts: row.alerts,
+        confirmedCases: row.confirmed,
+        deaths: row.deaths,
+        recovered: row.recovered,
+      })),
+      total: countyGroups.total,
+      provenance: facilityProvenance,
+    };
+
     return {
       meta: {
         tab: 'summary',
@@ -1101,6 +1129,7 @@ export class OperationalService {
       cards,
       charts,
       breakdown,
+      geography,
     };
   }
 
@@ -2136,6 +2165,45 @@ export class OperationalService {
   }
 
   private async summaryFacilities(filters: OperationalFiltersDto) {
+    const groups = await this.summaryOutcomeGroups(
+      filters,
+      `coalesce(nullif(btrim(health_facility), ''), '')`,
+      BREAKDOWN_LIMIT,
+    );
+    return {
+      total: groups.total,
+      rows: groups.rows.map(
+        ({ name, alerts, confirmed, recovered, deaths }) => ({
+          name,
+          alerts,
+          confirmed,
+          recovered,
+          deaths,
+        }),
+      ),
+    };
+  }
+
+  // Counties are grouped case-insensitively: sources send both "Nairobi" and
+  // "NAIROBI". filterValue is the lower-cased key, which the case-insensitive
+  // linelist county filter matches.
+  private summaryCounties(filters: OperationalFiltersDto) {
+    return this.summaryOutcomeGroups(
+      filters,
+      `coalesce(lower(nullif(btrim(reporting_county), '')), '')`,
+      COUNTY_LIMIT,
+    );
+  }
+
+  // Alerts, confirmed cases, recoveries and deaths per group (facility or
+  // county) over the summary window. groupKey is a SQL expression over
+  // columns both gold.report_case_investigation and
+  // gold.report_treatment_outcome carry; '' means not recorded.
+  private async summaryOutcomeGroups(
+    filters: OperationalFiltersDto,
+    groupKey: string,
+    limit: number,
+  ) {
     const params: unknown[] = [];
     const caseWindow = this.resolveWindow(
       filters,
@@ -2149,13 +2217,11 @@ export class OperationalService {
       1,
     );
 
-    const facilityKey = `coalesce(nullif(btrim(health_facility), ''), '')`;
-
     const rows = await this.many(
       `
       WITH case_base AS (
         SELECT
-          ${facilityKey} AS facility_key,
+          ${groupKey} AS facility_key,
           initial_suspected_count,
           initial_probable_count,
           final_confirmed_count,
@@ -2176,7 +2242,7 @@ export class OperationalService {
       ),
       outcome_base AS (
         SELECT
-          ${facilityKey} AS facility_key,
+          ${groupKey} AS facility_key,
           recovered_count,
           deceased_count,
           coalesce(
@@ -2244,6 +2310,7 @@ export class OperationalService {
       )
       SELECT
         name,
+        unrecorded,
         alerts,
         confirmed,
         recovered,
@@ -2251,7 +2318,7 @@ export class OperationalService {
         count(*) OVER ()::int AS total_groups
       FROM active_facilities
       ORDER BY unrecorded ASC, alerts DESC, confirmed DESC, name ASC
-      LIMIT ${BREAKDOWN_LIMIT}
+      LIMIT ${limit}
     `,
       params,
     );
@@ -2260,6 +2327,7 @@ export class OperationalService {
       total: rows.length > 0 ? num(rows[0].total_groups) : 0,
       rows: rows.map((row) => ({
         name: String(row.name),
+        filterValue: row.unrecorded === true ? null : String(row.name),
         alerts: num(row.alerts),
         confirmed: num(row.confirmed),
         recovered: num(row.recovered),

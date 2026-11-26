@@ -39,6 +39,7 @@ const FREE_TEXT_FILTER_KEYS = [
   'screeningOutcome',
   'screeningCategory',
   'treatmentOutcome',
+  'county',
 ] as const;
 
 const REGISTRY_COLUMNS: ReadonlySet<string> = new Set([

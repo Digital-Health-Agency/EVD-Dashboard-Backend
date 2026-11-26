@@ -1541,6 +1541,36 @@ const SUMMARY_FACILITY_ROWS = [
   },
 ];
 
+const SUMMARY_COUNTY_ROWS = [
+  {
+    name: 'nairobi',
+    unrecorded: false,
+    alerts: 25,
+    confirmed: 9,
+    recovered: 0,
+    deaths: 1,
+    total_groups: 3,
+  },
+  {
+    name: 'busia',
+    unrecorded: false,
+    alerts: 7,
+    confirmed: 0,
+    recovered: 0,
+    deaths: 0,
+    total_groups: 3,
+  },
+  {
+    name: 'Not recorded',
+    unrecorded: true,
+    alerts: 1,
+    confirmed: 0,
+    recovered: 0,
+    deaths: 0,
+    total_groups: 3,
+  },
+];
+
 interface SummaryProbe {
   queries: string[];
   values: unknown[][];
@@ -1560,7 +1590,12 @@ function fakeSummaryDb(
       probe.values.push(params ?? []);
 
       let rows: unknown[];
-      if (sql.includes('active_facilities AS')) {
+      if (
+        sql.includes('active_facilities AS') &&
+        sql.includes('reporting_county')
+      ) {
+        rows = SUMMARY_COUNTY_ROWS;
+      } else if (sql.includes('active_facilities AS')) {
         rows = facilityRows;
       } else if (sql.includes('AS alerts')) {
         rows = [{ ...SUMMARY_CASE_ROW, ...overrides.cases }];
@@ -1868,7 +1903,7 @@ describe('OperationalService.summaryTab', () => {
   it('composes in bounded groups rather than one wide fan-out', async () => {
     const { queries, maxInFlight } = await runSummaryTab();
 
-    expect(queries).toHaveLength(8);
+    expect(queries).toHaveLength(9);
     expect(maxInFlight).toBeLessThanOrEqual(3);
     expect(maxInFlight).toBeGreaterThan(1);
   });
@@ -1897,7 +1932,15 @@ describe('OperationalService.summaryTab', () => {
     const { queries } = await runSummaryTab();
     const sql = queries.join('\n');
 
-    expect(sql).not.toContain('reporting_county');
+    // County appears only in the county map's GROUP BY key, never as a filter.
+    const countyStatements = queries.filter((statement) =>
+      statement.includes('reporting_county'),
+    );
+    expect(countyStatements).toHaveLength(1);
+    expect(countyStatements[0]).toContain('GROUP BY');
+    expect(countyStatements[0]).not.toMatch(
+      /reporting_county\s*(=|<>|!=|~~|~|ilike\b|like\b|in\s*\()/i,
+    );
     expect(sql).not.toContain('reporting_subcounty');
     expect(sql).not.toMatch(/dim_facilitylist/);
 
@@ -2125,6 +2168,64 @@ describe('OperationalService.summaryTab', () => {
         'WHERE alerts + confirmed + recovered + deaths > 0',
       ) as number,
     );
+  });
+
+  it('groups the county map case-insensitively and keeps facility rows unchanged', async () => {
+    const { queries, payload } = await runSummaryTab();
+    const countySql = queries.find((statement) =>
+      statement.includes('reporting_county'),
+    );
+    expect(countySql).toContain(
+      "coalesce(lower(nullif(btrim(reporting_county), '')), '')",
+    );
+    expect(countySql).toContain('LIMIT 100');
+
+    expect(payload.breakdown?.rows[0]).toEqual({
+      name: 'Kenyatta National Hospital',
+      alerts: 44,
+      confirmed: 0,
+      recovered: 0,
+      deaths: 0,
+    });
+  });
+
+  it('returns summary indicators per county for the county map', async () => {
+    const { payload } = await runSummaryTab();
+
+    expect(payload.geography?.level).toBe('county');
+    expect(payload.geography?.indicators.map((entry) => entry.key)).toEqual([
+      'alerts',
+      'confirmedCases',
+      'deaths',
+      'recovered',
+    ]);
+    expect(payload.geography?.total).toBe(3);
+    expect(payload.geography?.rows).toEqual([
+      {
+        name: 'nairobi',
+        filterValue: 'nairobi',
+        alerts: 25,
+        confirmedCases: 9,
+        deaths: 1,
+        recovered: 0,
+      },
+      {
+        name: 'busia',
+        filterValue: 'busia',
+        alerts: 7,
+        confirmedCases: 0,
+        deaths: 0,
+        recovered: 0,
+      },
+      {
+        name: 'Not recorded',
+        filterValue: null,
+        alerts: 1,
+        confirmedCases: 0,
+        deaths: 0,
+        recovered: 0,
+      },
+    ]);
   });
 
   it('degrades the community provenance when no signal is in scope', async () => {
@@ -2416,7 +2517,7 @@ describe('OperationalService.summaryTab headline override', () => {
   it('never asks the warehouse pool for the series', async () => {
     const { queries } = await runHeadlineSummary(overridesStub(OFFICIAL_ROW));
 
-    expect(queries).toHaveLength(8);
+    expect(queries).toHaveLength(9);
     expect(queries.join('\n')).not.toContain('headline_overrides');
   });
 });

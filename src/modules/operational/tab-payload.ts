@@ -22,7 +22,9 @@ export type DataQualityStatus =
   | 'incomplete'
   | 'unavailable';
 
-export type SecurityClassification = 'public aggregate' | 'restricted aggregate';
+export type SecurityClassification =
+  | 'public aggregate'
+  | 'restricted aggregate';
 
 export interface IndicatorMeta {
   indicatorId: string;
@@ -108,6 +110,29 @@ export interface TabBreakdown {
   meta?: IndicatorMeta;
 }
 
+export interface TabGeographyIndicator {
+  // Matches the summary card key, so the dashboard reuses its linelist.
+  key: string;
+  label: string;
+}
+
+// Summary indicators per county, for the summary county map. rows hold one
+// count per indicator key; filterValue feeds the linelist county filter and
+// is null for records with no county.
+export interface TabGeography {
+  title: string;
+  level: 'county';
+  indicators: TabGeographyIndicator[];
+  rows: Array<
+    { name: string; filterValue: string | null } & Record<
+      string,
+      number | string | null
+    >
+  >;
+  total: number;
+  provenance: Provenance;
+}
+
 export interface TabPayload {
   meta: {
     tab: TabKey;
@@ -120,4 +145,5 @@ export interface TabPayload {
   cards: TabCard[];
   charts: TabChart[];
   breakdown: TabBreakdown | null;
+  geography?: TabGeography;
 }
